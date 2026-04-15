@@ -1,0 +1,368 @@
+"""Tender tracker view (spec §3.2)."""
+
+from __future__ import annotations
+
+from datetime import date
+
+from PySide6.QtCore import QDate, Qt
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QHBoxLayout,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QTableWidgetItem,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ..db import session_scope
+from ..models.firm import Firm
+from ..models.tender import Tender
+from ..services import audit as audit_svc
+from ..services.validators import validate_tender
+from .widgets import make_date_edit, make_money_spin, make_table
+
+PARTICIPATION_CHOICES = (
+    "",
+    "Participated",
+    "Participated in Support",
+    "Not Participated",
+    "Cancelled",
+)
+
+
+def _qdate(d: date | None) -> QDate:
+    if d is None:
+        return QDate(1900, 1, 1)
+    return QDate(d.year, d.month, d.day)
+
+
+def _pydate(q: QDate) -> date | None:
+    if q == QDate(1900, 1, 1):
+        return None
+    return date(q.year(), q.month(), q.day())
+
+
+class TenderEditor(QDialog):
+    def __init__(self, tender: Tender | None, firms: list[Firm], parent=None) -> None:
+        super().__init__(parent)
+        self.tender_id = tender.id if tender else None
+        self.setWindowTitle("Edit Tender" if tender else "New Tender")
+        self.setMinimumWidth(560)
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self.firm_cb = QComboBox()
+        for f in firms:
+            self.firm_cb.addItem(f.name, f.id)
+        if tender:
+            idx = self.firm_cb.findData(tender.firm_id)
+            if idx >= 0:
+                self.firm_cb.setCurrentIndex(idx)
+
+        self.bid_no = QLineEdit(tender.bid_no if tender else "")
+        self.organisation = QLineEdit(tender.organisation if tender else "")
+        self.department = QLineEdit(tender.department if tender else "")
+        self.state = QLineEdit(tender.state if tender else "")
+        self.location = QLineEdit(tender.location if tender else "")
+
+        self.publish_date = make_date_edit()
+        self.publish_date.setDate(_qdate(tender.publish_date if tender else None))
+        self.due_date = make_date_edit()
+        self.due_date.setDate(_qdate(tender.due_date if tender else None))
+
+        self.tender_value = make_money_spin()
+        if tender and tender.tender_value is not None:
+            self.tender_value.setValue(tender.tender_value)
+        self.emd = make_money_spin()
+        if tender and tender.emd is not None:
+            self.emd.setValue(tender.emd)
+        self.publish_rate = make_money_spin()
+        if tender and tender.publish_rate is not None:
+            self.publish_rate.setValue(tender.publish_rate)
+        self.quoted_rates = make_money_spin()
+        if tender and tender.quoted_rates is not None:
+            self.quoted_rates.setValue(tender.quoted_rates)
+
+        self.contract_months = QDoubleSpinBox()
+        self.contract_months.setDecimals(1)
+        self.contract_months.setMaximum(360)
+        if tender and tender.contract_period_months is not None:
+            self.contract_months.setValue(tender.contract_period_months)
+
+        self.participation_cb = QComboBox()
+        self.participation_cb.addItems(PARTICIPATION_CHOICES)
+        if tender and tender.participation_status:
+            idx = self.participation_cb.findText(tender.participation_status)
+            if idx >= 0:
+                self.participation_cb.setCurrentIndex(idx)
+
+        self.nature = QLineEdit(tender.nature_of_work if tender else "")
+        self.scope = QTextEdit(tender.scope_of_work if tender and tender.scope_of_work else "")
+        self.scope.setFixedHeight(60)
+
+        self.technical_status = QLineEdit(tender.technical_status if tender else "")
+        self.financial_status = QLineEdit(tender.financial_status if tender else "")
+        self.our_status = QLineEdit(tender.our_status if tender else "")
+
+        self.is_reference = QCheckBox("Reference only (benchmark, not bid by us)")
+        if tender:
+            self.is_reference.setChecked(tender.is_reference)
+
+        form.addRow("Firm *", self.firm_cb)
+        form.addRow("Bid No.", self.bid_no)
+        form.addRow("Organisation", self.organisation)
+        form.addRow("Department", self.department)
+        form.addRow("State", self.state)
+        form.addRow("Location", self.location)
+        form.addRow("Publish date", self.publish_date)
+        form.addRow("Due date", self.due_date)
+        form.addRow("Tender value", self.tender_value)
+        form.addRow("EMD", self.emd)
+        form.addRow("Publish rate", self.publish_rate)
+        form.addRow("Quoted rates", self.quoted_rates)
+        form.addRow("Contract period (months)", self.contract_months)
+        form.addRow("Participation", self.participation_cb)
+        form.addRow("Nature of work", self.nature)
+        form.addRow("Scope of work", self.scope)
+        form.addRow("Technical status", self.technical_status)
+        form.addRow("Financial status", self.financial_status)
+        form.addRow("Our status", self.our_status)
+        form.addRow("", self.is_reference)
+        layout.addLayout(form)
+
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        btns.accepted.connect(self._save)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def _save(self) -> None:
+        payload = dict(
+            firm_id=self.firm_cb.currentData(),
+            bid_no=self.bid_no.text(),
+            organisation=self.organisation.text(),
+            department=self.department.text(),
+            state=self.state.text(),
+            location=self.location.text(),
+            publish_date=_pydate(self.publish_date.date()),
+            due_date=_pydate(self.due_date.date()),
+            tender_value=self.tender_value.value() or None,
+            emd=self.emd.value() or None,
+            publish_rate=self.publish_rate.value() or None,
+            quoted_rates=self.quoted_rates.value() or None,
+            contract_period_months=self.contract_months.value() or None,
+            participation_status=self.participation_cb.currentText() or None,
+            nature_of_work=self.nature.text() or None,
+            scope_of_work=self.scope.toPlainText() or None,
+            technical_status=self.technical_status.text() or None,
+            financial_status=self.financial_status.text() or None,
+            our_status=self.our_status.text() or None,
+            is_reference=self.is_reference.isChecked(),
+        )
+        errors = validate_tender(payload)
+        if errors:
+            QMessageBox.warning(self, "Validation", "\n".join(errors))
+            return
+        with session_scope() as session:
+            if self.tender_id:
+                tender = session.get(Tender, self.tender_id)
+                if tender is None:
+                    return
+                old = {k: getattr(tender, k) for k in payload}
+                for k, v in payload.items():
+                    setattr(tender, k, v)
+                audit_svc.record(
+                    session,
+                    user_id=None,
+                    table="tenders",
+                    record_id=tender.id,
+                    action="update",
+                    old=old,
+                    new=payload,
+                )
+            else:
+                tender = Tender(**payload)
+                session.add(tender)
+                session.flush()
+                audit_svc.record(
+                    session,
+                    user_id=None,
+                    table="tenders",
+                    record_id=tender.id,
+                    action="create",
+                    new=payload,
+                )
+        self.accept()
+
+
+class TendersView(QWidget):
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        bar = QHBoxLayout()
+        self.new_btn = QPushButton("New tender")
+        self.edit_btn = QPushButton("Edit")
+        self.delete_btn = QPushButton("Delete")
+        self.generate_btn = QPushButton("Generate submission checklist")
+        self.refresh_btn = QPushButton("Refresh")
+        self.filter = QLineEdit()
+        self.filter.setPlaceholderText("Filter by bid no / organisation")
+        bar.addWidget(self.new_btn)
+        bar.addWidget(self.edit_btn)
+        bar.addWidget(self.delete_btn)
+        bar.addWidget(self.generate_btn)
+        bar.addWidget(self.filter)
+        bar.addStretch(1)
+        bar.addWidget(self.refresh_btn)
+        layout.addLayout(bar)
+
+        self.table = make_table(
+            [
+                "Due",
+                "Firm",
+                "Bid No.",
+                "Organisation",
+                "Department",
+                "Value",
+                "Participation",
+                "Status",
+            ]
+        )
+        layout.addWidget(self.table)
+
+        self.new_btn.clicked.connect(self._new)
+        self.edit_btn.clicked.connect(self._edit)
+        self.delete_btn.clicked.connect(self._delete)
+        self.generate_btn.clicked.connect(self._generate_checklist)
+        self.refresh_btn.clicked.connect(self.refresh)
+        self.filter.textChanged.connect(self.refresh)
+        self.refresh()
+
+    def _selected_id(self) -> int | None:
+        row = self.table.currentRow()
+        if row < 0:
+            return None
+        item = self.table.item(row, 0)
+        return int(item.data(Qt.ItemDataRole.UserRole)) if item else None
+
+    def refresh(self) -> None:
+        needle = (self.filter.text() or "").strip().lower()
+        with session_scope() as session:
+            q = session.query(Tender).order_by(Tender.due_date.asc().nullslast())
+            tenders = q.all()
+            rows = []
+            for t in tenders:
+                hay = " ".join(
+                    filter(None, [t.bid_no, t.organisation, t.department, t.location])
+                ).lower()
+                if needle and needle not in hay:
+                    continue
+                rows.append(t)
+            self.table.setRowCount(len(rows))
+            for r, t in enumerate(rows):
+                due = t.due_date.isoformat() if t.due_date else "-"
+                firm = t.firm.name if t.firm else "-"
+                item = QTableWidgetItem(due)
+                item.setData(Qt.ItemDataRole.UserRole, t.id)
+                self.table.setItem(r, 0, item)
+                self.table.setItem(r, 1, QTableWidgetItem(firm))
+                self.table.setItem(r, 2, QTableWidgetItem(t.bid_no or "-"))
+                self.table.setItem(r, 3, QTableWidgetItem(t.organisation or "-"))
+                self.table.setItem(r, 4, QTableWidgetItem(t.department or "-"))
+                self.table.setItem(
+                    r,
+                    5,
+                    QTableWidgetItem(
+                        f"{t.tender_value:,.0f}" if t.tender_value is not None else "-"
+                    ),
+                )
+                self.table.setItem(r, 6, QTableWidgetItem(t.participation_status or "-"))
+                self.table.setItem(r, 7, QTableWidgetItem(t.our_status or "-"))
+
+    def _open_editor(self, tender: Tender | None) -> None:
+        with session_scope() as session:
+            firms = (
+                session.query(Firm)
+                .filter(Firm.is_archived == False)  # noqa: E712
+                .order_by(Firm.name)
+                .all()
+            )
+            for f in firms:
+                session.expunge(f)
+        if not firms:
+            QMessageBox.warning(self, "No firms", "Create a firm first.")
+            return
+        dlg = TenderEditor(tender, firms, self)
+        if dlg.exec():
+            self.refresh()
+
+    def _new(self) -> None:
+        self._open_editor(None)
+
+    def _edit(self) -> None:
+        tid = self._selected_id()
+        if tid is None:
+            return
+        with session_scope() as session:
+            tender = session.get(Tender, tid)
+            if tender is None:
+                return
+            session.expunge(tender)
+        self._open_editor(tender)
+
+    def _delete(self) -> None:
+        tid = self._selected_id()
+        if tid is None:
+            return
+        confirm = QMessageBox.question(self, "Delete", "Delete the selected tender?")
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        with session_scope() as session:
+            tender = session.get(Tender, tid)
+            if tender is None:
+                return
+            session.delete(tender)
+            audit_svc.record(
+                session,
+                user_id=None,
+                table="tenders",
+                record_id=tid,
+                action="delete",
+            )
+        self.refresh()
+
+    def _generate_checklist(self) -> None:
+        from ..services import checklist as checklist_svc
+        from ..wizard_service import checklist_generator_enabled
+
+        tid = self._selected_id()
+        if tid is None:
+            return
+        with session_scope() as session:
+            if not checklist_generator_enabled(session):
+                QMessageBox.information(
+                    self,
+                    "Setup required",
+                    "Setup required — see Settings → Checklist Rules.",
+                )
+                return
+            tender = session.get(Tender, tid)
+            if tender is None:
+                return
+            items, instance = checklist_svc.generate_checklist(session, tender)
+        pdf = instance.pdf_path or "(PDF skipped)"
+        QMessageBox.information(
+            self,
+            "Checklist generated",
+            f"{len(items)} items. PDF: {pdf}",
+        )
