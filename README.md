@@ -85,6 +85,39 @@ python -m pytest
 Every test runs against a fresh temporary `TENDER_ERP_HOME` fixture,
 so your real DB is never touched.
 
+## Packaged builds
+
+GitHub Actions builds downloadable artifacts on every push to any
+branch — see `.github/workflows/build.yml`. Three jobs run in order:
+
+1. **test** (ubuntu) — pytest suite, must pass before the builds run.
+2. **build-windows** (windows-latest) — PyInstaller produces a
+   `TenderERP\TenderERP.exe` tree under `dist/`. Artifact:
+   `TenderERP-windows-<sha>`.
+3. **build-macos** (macos-latest) — py2app produces
+   `dist/TenderERP.app`, zipped with `ditto` to preserve the bundle
+   symlinks. Artifact: `TenderERP-macos-<sha>`.
+
+Download the artifact from the workflow run page, unzip, and run.
+
+### Building locally
+
+**Windows** (PowerShell):
+
+```powershell
+pip install pyinstaller
+pyinstaller --noconfirm tender_erp.spec
+# → dist\TenderERP\TenderERP.exe
+```
+
+**macOS** (Terminal):
+
+```bash
+pip install py2app
+python setup.py py2app
+# → dist/TenderERP.app
+```
+
 ## Layout
 
 ```
