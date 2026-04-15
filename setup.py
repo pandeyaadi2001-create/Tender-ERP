@@ -69,5 +69,11 @@ setup(
     name="TenderERP",
     app=APP,
     options={"py2app": OPTIONS},
-    setup_requires=["py2app"],
 )
+# NOTE: do *not* add ``setup_requires=["py2app"]`` here. Modern
+# setuptools (>= 80) removed the legacy ``easy_install`` code path
+# that backed ``setup_requires``, and setting it makes this file
+# fail to parse with "install_requires is no longer supported".
+# The CI workflow and the local install instructions both run
+# ``pip install py2app`` before ``python setup.py py2app``, which
+# is the supported way to bring the build tool in.
