@@ -66,13 +66,13 @@ python -m tender_erp.cli seed-firms                  # spec §2 firms
 python -m tender_erp.cli seed-rules                  # starter rule library
 python -m tender_erp.cli dashboard                   # text snapshot
 python -m tender_erp.cli import-tenders \
-    --firm "Mr. Johnny Care Services (India) Pvt Ltd" \
-    02_Mr__Johnny_Tender_Tracker.xlsx
+    --firm "firm 1" \
+    02_firm1_tracker.xlsx
 python -m tender_erp.cli import-compliance \
-    --firm "Mr. Johnny Care Services (India) Pvt Ltd" \
+    --firm "firm2" \
     03_All_Firms_Compliance_Tracker.xlsx
 python -m tender_erp.cli import-estamps \
-    --firm "Green Foods" 04_Estamp_Tracker_FY_2026-27.xlsx
+    --firm "firm3" 04_Estamp_Tracker_FY_2026-27.xlsx
 python -m tender_erp.cli backup                      # encrypted zip
 ```
 
