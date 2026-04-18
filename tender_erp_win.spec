@@ -11,6 +11,7 @@ The macOS build should use tender_erp.spec instead (includes BUNDLE).
 """
 
 from PyInstaller.utils.hooks import collect_submodules
+import os
 import sys
 
 block_cipher = None
@@ -61,7 +62,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="assets/icon.ico" if sys.platform == "win32" else None,
+    icon="assets/icon.ico" if os.path.exists("assets/icon.ico") else None,
 )
 
 coll = COLLECT(
