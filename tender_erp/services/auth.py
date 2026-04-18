@@ -36,6 +36,13 @@ class AccountDisabled(AuthError):
     pass
 
 
+class NeedsPasswordChange(AuthError):
+    """Raised when the user must change their password (e.g., first login)."""
+    def __init__(self, message: str, user_id: int):
+        super().__init__(message)
+        self.user_id = user_id
+
+
 def create_user(
     session: Session,
     *,
@@ -89,10 +96,13 @@ def authenticate(session: Session, username: str, password: str) -> User:
         raise AccountLocked(f"account locked until {user.locked_until.isoformat()}")
 
     if verify_password(password, user.password_hash):
+        is_first_login = user.last_login_at is None
         user.failed_login_count = 0
         user.locked_until = None
         user.last_login_at = now
         session.flush()
+        if is_first_login:
+            raise NeedsPasswordChange("First login: password reset required", user.id)
         return user
 
     user.failed_login_count += 1

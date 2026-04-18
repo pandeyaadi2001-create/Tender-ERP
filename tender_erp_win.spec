@@ -1,22 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec file for the Windows build.
+"""PyInstaller spec file for Windows builds ONLY.
 
-Used by both:
+Usage on Windows:
+    pip install pyinstaller
+    pyinstaller --noconfirm tender_erp_win.spec
 
-* The CI workflow (``.github/workflows/build.yml``), which runs
-  ``pyinstaller tender_erp.spec`` on ``windows-latest``.
-* Developers who want to build locally on their Windows box::
+Output: dist\\TenderERP\\TenderERP.exe
 
-      pip install pyinstaller
-      pyinstaller tender_erp.spec
-
-The output goes to ``dist\\TenderERP\\TenderERP.exe``.
-
-Keeping this file committed (instead of passing flags on the CLI)
-means every build uses exactly the same hiddenimports / data files.
+The macOS build should use tender_erp.spec instead (includes BUNDLE).
 """
 
 from PyInstaller.utils.hooks import collect_submodules
+import sys
 
 block_cipher = None
 
@@ -61,11 +56,12 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=False,  # windowed mode — no console window on launch
+    console=False,              # Windowed mode — no console on launch
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon="assets/icon.ico" if sys.platform == "win32" else None,
 )
 
 coll = COLLECT(
@@ -77,11 +73,4 @@ coll = COLLECT(
     upx=False,
     upx_exclude=[],
     name="TenderERP",
-)
-
-app = BUNDLE(
-    coll,
-    name='Tender ERP.app',
-    icon=None,
-    bundle_identifier='com.tendererp.app',
 )

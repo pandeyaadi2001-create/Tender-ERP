@@ -22,6 +22,7 @@ from ..models.firm import Firm
 from ..services import audit as audit_svc
 from ..services.validators import validate_firm
 from .widgets import make_table
+from .event_bus import global_bus
 
 
 class FirmEditor(QDialog):
@@ -34,19 +35,27 @@ class FirmEditor(QDialog):
 
         form = QFormLayout()
         self.name = QLineEdit(firm.name if firm else "")
+        self.firm_code = QLineEdit(firm.firm_code if firm else "")
+        self.firm_code.setPlaceholderText("e.g. AIPL, CCL, BEW")
+        self.firm_color = QLineEdit(firm.firm_color_hex if firm else "")
+        self.firm_color.setPlaceholderText("#2563EB")
         self.gstin = QLineEdit(firm.gstin if firm else "")
         self.pan = QLineEdit(firm.pan if firm else "")
         self.udyam = QLineEdit(firm.udyam if firm else "")
         self.address = QTextEdit(firm.address if firm and firm.address else "")
         self.address.setFixedHeight(80)
+        self.firm_state = QLineEdit(firm.state if firm else "")
         self.contact_person = QLineEdit(firm.contact_person if firm else "")
         self.contact_phone = QLineEdit(firm.contact_phone if firm else "")
         self.contact_email = QLineEdit(firm.contact_email if firm else "")
         form.addRow("Legal name *", self.name)
+        form.addRow("Firm Code *", self.firm_code)
+        form.addRow("Color (hex)", self.firm_color)
         form.addRow("GSTIN", self.gstin)
         form.addRow("PAN", self.pan)
         form.addRow("Udyam/MSME", self.udyam)
         form.addRow("Address", self.address)
+        form.addRow("State", self.firm_state)
         form.addRow("Contact person", self.contact_person)
         form.addRow("Phone", self.contact_phone)
         form.addRow("Email", self.contact_email)
@@ -62,10 +71,13 @@ class FirmEditor(QDialog):
     def _save(self) -> None:
         payload = dict(
             name=self.name.text(),
+            firm_code=self.firm_code.text().strip().upper() or None,
+            firm_color_hex=self.firm_color.text().strip() or None,
             gstin=self.gstin.text(),
             pan=self.pan.text(),
             udyam=self.udyam.text(),
             address=self.address.toPlainText(),
+            state=self.firm_state.text().strip() or None,
             contact_person=self.contact_person.text(),
             contact_phone=self.contact_phone.text(),
             contact_email=self.contact_email.text(),
@@ -105,6 +117,7 @@ class FirmEditor(QDialog):
                     new=payload,
                 )
         self.accept()
+        global_bus.dataChanged.emit()
 
 
 class FirmsView(QWidget):
@@ -188,4 +201,5 @@ class FirmsView(QWidget):
                 action="update",
                 note="archive toggled",
             )
+        global_bus.dataChanged.emit()
         self.refresh()

@@ -21,10 +21,13 @@ class Firm(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    firm_code: Mapped[str | None] = mapped_column(String(16), unique=True, nullable=True)
+    firm_color_hex: Mapped[str | None] = mapped_column(String(7), nullable=True)
     gstin: Mapped[str | None] = mapped_column(String(32), nullable=True)
     pan: Mapped[str | None] = mapped_column(String(16), nullable=True)
     udyam: Mapped[str | None] = mapped_column(String(32), nullable=True)
     address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[str | None] = mapped_column(String(64), nullable=True)
     contact_person: Mapped[str | None] = mapped_column(String(128), nullable=True)
     contact_phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     contact_email: Mapped[str | None] = mapped_column(String(255), nullable=True)

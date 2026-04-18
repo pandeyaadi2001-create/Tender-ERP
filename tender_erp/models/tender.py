@@ -80,11 +80,25 @@ class Tender(Base, TimestampMixin):
     # Reference-only flag — spec §3.2 "Reference Tenders sub-module".
     is_reference: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Portal & classification
+    portal: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    category: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    document_fee: Mapped[float | None] = mapped_column(Float, nullable=True)
+    processing_fee: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    # Award tracking — spec §5 "Bids Awarded"
+    awarded_flag: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    awarded_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    awarded_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    loa_po_number: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    loa_document: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    execution_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     firm = relationship("Firm", back_populates="tenders")
     attachments = relationship(
         "TenderAttachment", back_populates="tender", cascade="all, delete-orphan"
     )
-    estamps = relationship("Estamp", back_populates="tender")
+    estamps = relationship("Estamp", back_populates="tender", foreign_keys="[Estamp.tender_id]")
     checklist_instances = relationship(
         "ChecklistInstance", back_populates="tender", cascade="all, delete-orphan"
     )

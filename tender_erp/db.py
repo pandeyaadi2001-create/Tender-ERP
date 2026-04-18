@@ -48,6 +48,9 @@ def init_db(db_path: Optional[Path] = None) -> Engine:
     from .models.base import Base
 
     Base.metadata.create_all(_engine)
+    # Apply column-level migrations for existing databases
+    from .migrate import run_migrations
+    run_migrations(_engine)
     _SessionLocal = sessionmaker(bind=_engine, autoflush=False, expire_on_commit=False)
     return _engine
 

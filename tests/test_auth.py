@@ -18,6 +18,9 @@ def _make_user(password: str = "hunter2") -> int:
             password=password,
             role=Role.ADMIN.value,
         )
+        from datetime import datetime, timedelta
+        user.last_login_at = datetime.utcnow() - timedelta(days=1)
+        session.commit()
         return user.id
 
 

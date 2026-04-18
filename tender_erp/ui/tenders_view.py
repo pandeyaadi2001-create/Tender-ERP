@@ -6,20 +6,9 @@ from datetime import date
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
-    QDialog,
-    QDialogButtonBox,
-    QDoubleSpinBox,
-    QFormLayout,
-    QHBoxLayout,
-    QLineEdit,
-    QMessageBox,
-    QPushButton,
-    QTableWidgetItem,
-    QTextEdit,
-    QVBoxLayout,
-    QWidget,
+    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
+    QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+    QPushButton, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from ..db import session_scope
@@ -28,6 +17,7 @@ from ..models.tender import Tender
 from ..services import audit as audit_svc
 from ..services.validators import validate_tender
 from .widgets import make_date_edit, make_money_spin, make_table
+from .event_bus import global_bus
 
 PARTICIPATION_CHOICES = (
     "",
@@ -117,9 +107,43 @@ class TenderEditor(QDialog):
         if tender:
             self.is_reference.setChecked(tender.is_reference)
 
+        # Portal & classification
+        self.portal_cb = QComboBox()
+        self.portal_cb.addItems(["", "GeM", "eTender", "IREPS", "Other"])
+        if tender and tender.portal:
+            idx = self.portal_cb.findText(tender.portal)
+            if idx >= 0:
+                self.portal_cb.setCurrentIndex(idx)
+        self.category_field = QLineEdit(tender.category if tender else "")
+        self.document_fee = make_money_spin()
+        if tender and tender.document_fee is not None:
+            self.document_fee.setValue(tender.document_fee)
+        self.processing_fee = make_money_spin()
+        if tender and tender.processing_fee is not None:
+            self.processing_fee.setValue(tender.processing_fee)
+
+        # Award section
+        self.awarded_check = QCheckBox("Tender Awarded")
+        if tender:
+            self.awarded_check.setChecked(tender.awarded_flag)
+        self.awarded_date = make_date_edit()
+        self.awarded_date.setDate(_qdate(tender.awarded_date if tender else None))
+        self.awarded_value = make_money_spin()
+        if tender and tender.awarded_value is not None:
+            self.awarded_value.setValue(tender.awarded_value)
+        self.loa_po = QLineEdit(tender.loa_po_number if tender else "")
+        self.exec_status_cb = QComboBox()
+        self.exec_status_cb.addItems(["", "Not Started", "In Progress", "Completed"])
+        if tender and tender.execution_status:
+            idx = self.exec_status_cb.findText(tender.execution_status)
+            if idx >= 0:
+                self.exec_status_cb.setCurrentIndex(idx)
+
         form.addRow("Firm *", self.firm_cb)
         form.addRow("Bid No.", self.bid_no)
         form.addRow("Organisation", self.organisation)
+        form.addRow("Portal", self.portal_cb)
+        form.addRow("Category", self.category_field)
         form.addRow("Department", self.department)
         form.addRow("State", self.state)
         form.addRow("Location", self.location)
@@ -127,6 +151,8 @@ class TenderEditor(QDialog):
         form.addRow("Due date", self.due_date)
         form.addRow("Tender value", self.tender_value)
         form.addRow("EMD", self.emd)
+        form.addRow("Document fee", self.document_fee)
+        form.addRow("Processing fee", self.processing_fee)
         form.addRow("Publish rate", self.publish_rate)
         form.addRow("Quoted rates", self.quoted_rates)
         form.addRow("Contract period (months)", self.contract_months)
@@ -137,6 +163,24 @@ class TenderEditor(QDialog):
         form.addRow("Financial status", self.financial_status)
         form.addRow("Our status", self.our_status)
         form.addRow("", self.is_reference)
+
+        # Award section
+        award_sep = QLabel("── Award Details ──")
+        award_sep.setStyleSheet("font-weight: 600; color: #6B7280; padding-top: 8px; background: transparent;")
+        form.addRow("", award_sep)
+        form.addRow("", self.awarded_check)
+        self.award_date_row_label = QLabel("Award date")
+        form.addRow(self.award_date_row_label, self.awarded_date)
+        self.award_value_row_label = QLabel("Awarded value")
+        form.addRow(self.award_value_row_label, self.awarded_value)
+        self.loa_row_label = QLabel("LOA / PO Number")
+        form.addRow(self.loa_row_label, self.loa_po)
+        self.exec_row_label = QLabel("Execution status")
+        form.addRow(self.exec_row_label, self.exec_status_cb)
+
+        self.awarded_check.toggled.connect(self._toggle_award)
+        self._toggle_award(self.awarded_check.isChecked())
+
         layout.addLayout(form)
 
         btns = QDialogButtonBox(
@@ -146,11 +190,19 @@ class TenderEditor(QDialog):
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
 
+    def _toggle_award(self, checked: bool):
+        for w in [self.awarded_date, self.awarded_value, self.loa_po, self.exec_status_cb,
+                   self.award_date_row_label, self.award_value_row_label,
+                   self.loa_row_label, self.exec_row_label]:
+            w.setVisible(checked)
+
     def _save(self) -> None:
         payload = dict(
             firm_id=self.firm_cb.currentData(),
             bid_no=self.bid_no.text(),
             organisation=self.organisation.text(),
+            portal=self.portal_cb.currentText() or None,
+            category=self.category_field.text() or None,
             department=self.department.text(),
             state=self.state.text(),
             location=self.location.text(),
@@ -158,6 +210,8 @@ class TenderEditor(QDialog):
             due_date=_pydate(self.due_date.date()),
             tender_value=self.tender_value.value() or None,
             emd=self.emd.value() or None,
+            document_fee=self.document_fee.value() or None,
+            processing_fee=self.processing_fee.value() or None,
             publish_rate=self.publish_rate.value() or None,
             quoted_rates=self.quoted_rates.value() or None,
             contract_period_months=self.contract_months.value() or None,
@@ -168,6 +222,11 @@ class TenderEditor(QDialog):
             financial_status=self.financial_status.text() or None,
             our_status=self.our_status.text() or None,
             is_reference=self.is_reference.isChecked(),
+            awarded_flag=self.awarded_check.isChecked(),
+            awarded_date=_pydate(self.awarded_date.date()) if self.awarded_check.isChecked() else None,
+            awarded_value=self.awarded_value.value() or None if self.awarded_check.isChecked() else None,
+            loa_po_number=self.loa_po.text() or None,
+            execution_status=self.exec_status_cb.currentText() or None,
         )
         errors = validate_tender(payload)
         if errors:
@@ -203,6 +262,7 @@ class TenderEditor(QDialog):
                     new=payload,
                 )
         self.accept()
+        global_bus.dataChanged.emit()
 
 
 class TendersView(QWidget):
@@ -213,15 +273,24 @@ class TendersView(QWidget):
         self.new_btn = QPushButton("New tender")
         self.edit_btn = QPushButton("Edit")
         self.delete_btn = QPushButton("Delete")
+        self.import_btn = QPushButton("Import Excel")
         self.generate_btn = QPushButton("Generate submission checklist")
         self.refresh_btn = QPushButton("Refresh")
+        
         self.filter = QLineEdit()
-        self.filter.setPlaceholderText("Filter by bid no / organisation")
+        self.filter.setPlaceholderText("Filter by bid no / org")
+        
+        self.status_filter = QComboBox()
+        self.status_filter.addItem("All Statuses", "")
+        self.status_filter.addItems(PARTICIPATION_CHOICES[1:]) # Skip empty string in choices
+        
         bar.addWidget(self.new_btn)
         bar.addWidget(self.edit_btn)
         bar.addWidget(self.delete_btn)
+        bar.addWidget(self.import_btn)
         bar.addWidget(self.generate_btn)
         bar.addWidget(self.filter)
+        bar.addWidget(self.status_filter)
         bar.addStretch(1)
         bar.addWidget(self.refresh_btn)
         layout.addLayout(bar)
@@ -243,9 +312,11 @@ class TendersView(QWidget):
         self.new_btn.clicked.connect(self._new)
         self.edit_btn.clicked.connect(self._edit)
         self.delete_btn.clicked.connect(self._delete)
+        self.import_btn.clicked.connect(self._open_import)
         self.generate_btn.clicked.connect(self._generate_checklist)
         self.refresh_btn.clicked.connect(self.refresh)
         self.filter.textChanged.connect(self.refresh)
+        self.status_filter.currentTextChanged.connect(self.refresh)
         self.refresh()
 
     def _selected_id(self) -> int | None:
@@ -255,8 +326,18 @@ class TendersView(QWidget):
         item = self.table.item(row, 0)
         return int(item.data(Qt.ItemDataRole.UserRole)) if item else None
 
+    def _set_row_color(self, row: int, color: str) -> None:
+        from PySide6.QtGui import QColor, QBrush
+        brush = QBrush(QColor(color))
+        for col in range(self.table.columnCount()):
+            item = self.table.item(row, col)
+            if item:
+                item.setForeground(brush)
+
     def refresh(self) -> None:
         needle = (self.filter.text() or "").strip().lower()
+        status_filter = self.status_filter.currentData() or self.status_filter.currentText()
+        
         with session_scope() as session:
             q = session.query(Tender).order_by(Tender.due_date.asc().nullslast())
             tenders = q.all()
@@ -267,7 +348,11 @@ class TendersView(QWidget):
                 ).lower()
                 if needle and needle not in hay:
                     continue
+                if status_filter and t.participation_status != status_filter:
+                    continue
                 rows.append(t)
+            
+            self.table.setSortingEnabled(False)
             self.table.setRowCount(len(rows))
             for r, t in enumerate(rows):
                 due = t.due_date.isoformat() if t.due_date else "-"
@@ -288,6 +373,18 @@ class TendersView(QWidget):
                 )
                 self.table.setItem(r, 6, QTableWidgetItem(t.participation_status or "-"))
                 self.table.setItem(r, 7, QTableWidgetItem(t.our_status or "-"))
+                
+                # Color Coding
+                from datetime import date
+                if t.due_date:
+                    days_left = (t.due_date - date.today()).days
+                    if days_left <= 3:
+                        self._set_row_color(r, "#ef4444") # Red
+                    elif days_left <= 7:
+                        self._set_row_color(r, "#eab308") # Yellow
+                    else:
+                        self._set_row_color(r, "#22c55e") # Green
+            self.table.setSortingEnabled(True)
 
     def _open_editor(self, tender: Tender | None) -> None:
         with session_scope() as session:
@@ -339,6 +436,7 @@ class TendersView(QWidget):
                 record_id=tid,
                 action="delete",
             )
+        global_bus.dataChanged.emit()
         self.refresh()
 
     def _generate_checklist(self) -> None:
@@ -366,3 +464,9 @@ class TendersView(QWidget):
             "Checklist generated",
             f"{len(items)} items. PDF: {pdf}",
         )
+
+    def _open_import(self):
+        from .import_dialog import ImportDialog
+        dlg = ImportDialog(self)
+        if dlg.exec():
+            self.refresh()

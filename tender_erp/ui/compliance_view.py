@@ -28,6 +28,7 @@ from ..models.firm import Firm
 from ..services import audit as audit_svc
 from ..services.validators import validate_compliance
 from .widgets import make_date_edit, make_table
+from .event_bus import global_bus
 
 STATUS_CHOICES = ("Active", "To Be Renewed", "Under Renewal", "Expired", "Not Applicable")
 
@@ -163,6 +164,7 @@ class ComplianceEditor(QDialog):
                     new=payload,
                 )
         self.accept()
+        global_bus.dataChanged.emit()
 
 
 class ComplianceView(QWidget):
@@ -173,10 +175,12 @@ class ComplianceView(QWidget):
         self.new_btn = QPushButton("New document")
         self.edit_btn = QPushButton("Edit")
         self.delete_btn = QPushButton("Delete")
+        self.import_btn = QPushButton("Import Excel")
         self.refresh_btn = QPushButton("Refresh")
         bar.addWidget(self.new_btn)
         bar.addWidget(self.edit_btn)
         bar.addWidget(self.delete_btn)
+        bar.addWidget(self.import_btn)
         bar.addStretch(1)
         bar.addWidget(self.refresh_btn)
         layout.addLayout(bar)
@@ -189,6 +193,7 @@ class ComplianceView(QWidget):
         self.new_btn.clicked.connect(self._new)
         self.edit_btn.clicked.connect(self._edit)
         self.delete_btn.clicked.connect(self._delete)
+        self.import_btn.clicked.connect(self._open_import)
         self.refresh_btn.clicked.connect(self.refresh)
         self.refresh()
 
@@ -198,6 +203,14 @@ class ComplianceView(QWidget):
             return None
         item = self.table.item(row, 0)
         return int(item.data(Qt.ItemDataRole.UserRole)) if item else None
+
+    def _set_row_color(self, row: int, color: str) -> None:
+        from PySide6.QtGui import QColor, QBrush
+        brush = QBrush(QColor(color))
+        for col in range(self.table.columnCount()):
+            item = self.table.item(row, col)
+            if item:
+                item.setForeground(brush)
 
     def refresh(self) -> None:
         with session_scope() as session:
@@ -224,6 +237,14 @@ class ComplianceView(QWidget):
                     ),
                 )
                 self.table.setItem(r, 7, QTableWidgetItem(d.status))
+                
+                if d.days_until_expiry is not None:
+                    if d.days_until_expiry <= 15:
+                        self._set_row_color(r, "#ef4444") # Red
+                    elif d.days_until_expiry <= 60:
+                        self._set_row_color(r, "#eab308") # Yellow
+                    else:
+                        self._set_row_color(r, "#22c55e") # Green
 
     def _with_firms(self):
         with session_scope() as session:
@@ -279,4 +300,11 @@ class ComplianceView(QWidget):
                 record_id=did,
                 action="delete",
             )
+        global_bus.dataChanged.emit()
         self.refresh()
+
+    def _open_import(self):
+        from .import_dialog import ImportDialog
+        dlg = ImportDialog(self)
+        if dlg.exec():
+            self.refresh()

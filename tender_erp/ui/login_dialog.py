@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QVBoxLayout,
+    QCheckBox,
 )
 
 from ..db import session_scope
@@ -28,6 +29,7 @@ class LoginDialog(QDialog):
         self.setModal(True)
         self.setMinimumWidth(360)
         self._user_id: Optional[int] = None
+        self._wants_remember_me: bool = False
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -36,6 +38,9 @@ class LoginDialog(QDialog):
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
         form.addRow("Username", self.username)
         form.addRow("Password", self.password)
+        
+        self.remember_me = QCheckBox("Remember me (stay logged in)")
+        form.addRow("", self.remember_me)
         layout.addLayout(form)
 
         self.error_label = QLabel("")
@@ -50,6 +55,10 @@ class LoginDialog(QDialog):
     @property
     def authenticated_user_id(self) -> Optional[int]:
         return self._user_id
+        
+    @property
+    def wants_remember_me(self) -> bool:
+        return self.remember_me.isChecked()
 
     def _on_accept(self) -> None:
         username = self.username.text().strip()
@@ -61,6 +70,19 @@ class LoginDialog(QDialog):
             with session_scope() as session:
                 user = auth.authenticate(session, username, password)
                 self._user_id = user.id
+        except auth.NeedsPasswordChange as exc:
+            from PySide6.QtWidgets import QInputDialog
+            new_pwd, ok = QInputDialog.getText(self, "Password Reset", "Set your new password:", QLineEdit.EchoMode.Password)
+            if ok and new_pwd:
+                with session_scope() as session:
+                    from ..models.user import User
+                    user = session.get(User, exc.user_id)
+                    auth.set_password(session, user, new_pwd)
+                self._user_id = exc.user_id
+                self.accept()
+            else:
+                self.error_label.setText("Password reset required")
+            return
         except auth.AccountLocked as exc:
             QMessageBox.warning(self, "Account locked", str(exc))
             self.error_label.setText(str(exc))

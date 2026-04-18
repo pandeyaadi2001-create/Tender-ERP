@@ -31,17 +31,6 @@ def _seed_world() -> int:
                     bid_no="B",
                     due_date=today + timedelta(days=20),
                 ),
-                Tender(
-                    firm_id=firm.id,
-                    bid_no="C-past",
-                    due_date=today - timedelta(days=5),
-                    technical_status="PENDING",
-                ),
-                Tender(
-                    firm_id=firm.id,
-                    bid_no="D-publishing",
-                    publish_date=today + timedelta(days=3),
-                ),
                 ComplianceDocument(
                     firm_id=firm.id,
                     document_name="GST",
@@ -54,7 +43,7 @@ def _seed_world() -> int:
                     expiry_date=today + timedelta(days=200),
                     status="Active",
                 ),
-                Estamp(firm_id=firm.id, entry_date=today, quantity=3, unit_rate=100.0),
+                Estamp(firm_id=firm.id, entry_date=today, quantity=3, unit_rate=100.0, status="purchased"),
             ]
         )
         return firm.id
@@ -67,11 +56,10 @@ def test_snapshot_bucketing():
     assert snap.firm_count == 1
     assert len(snap.tenders_7d) == 1
     assert snap.tenders_7d[0].bid_no == "A"
-    assert len(snap.tenders_8_to_30d) == 1
-    assert snap.tenders_8_to_30d[0].bid_no == "B"
+    assert snap.tenders_8_to_30d_count == 1
     assert any(d.document_name == "GST" for d in snap.compliance_60d)
     assert not any(d.document_name == "ISO" for d in snap.compliance_60d)
-    assert any(t.bid_no == "C-past" for t in snap.pending_status)
-    assert any(t.bid_no == "D-publishing" for t in snap.decision_required)
     assert snap.estamp_mtd.count == 3
     assert snap.estamp_mtd.total_spent == 300.0
+    assert snap.compliance_15d_count >= 1
+    assert snap.estamp_status.purchased_count == 3

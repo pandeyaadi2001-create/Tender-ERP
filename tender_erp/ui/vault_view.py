@@ -64,9 +64,11 @@ class VaultView(QWidget):
         self.lock_btn = QPushButton("Lock")
         self.refresh_btn = QPushButton("Refresh")
         self.copy_btn = QPushButton("Copy password")
+        self.import_btn = QPushButton("Import Excel")
         bar.addWidget(self.unlock_btn)
         bar.addWidget(self.lock_btn)
         bar.addWidget(self.copy_btn)
+        bar.addWidget(self.import_btn)
         bar.addStretch(1)
         bar.addWidget(self.refresh_btn)
         layout.addLayout(bar)
@@ -83,6 +85,7 @@ class VaultView(QWidget):
         self.lock_btn.clicked.connect(self._lock)
         self.refresh_btn.clicked.connect(self.refresh)
         self.copy_btn.clicked.connect(self._copy_password)
+        self.import_btn.clicked.connect(self._open_import)
         self._update_status()
 
     # --- vault session gate --------------------------------------------
@@ -197,3 +200,9 @@ class VaultView(QWidget):
             "Copied",
             f"Password copied. Clipboard clears in {SETTINGS.clipboard_clear_seconds}s.",
         )
+
+    def _open_import(self):
+        from .import_dialog import ImportDialog
+        dlg = ImportDialog(self)
+        if dlg.exec():
+            self.refresh()
