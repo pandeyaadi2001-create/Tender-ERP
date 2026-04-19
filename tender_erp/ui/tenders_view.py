@@ -42,6 +42,50 @@ PARTICIPATION_CHOICES = (
     "Cancelled",
 )
 
+# All columns aligned with Edit Tender form + checkbox, qty, service days, our status.
+TENDER_TABLE_COLUMNS = [
+    "",
+    "Firm",
+    "Bid No.",
+    "Organisation",
+    "Portal",
+    "Category",
+    "Department",
+    "State",
+    "Location",
+    "Publish date",
+    "Due date",
+    "Tender value",
+    "EMD",
+    "Doc. fee",
+    "Proc. fee",
+    "Publish rate",
+    "Quoted rates",
+    "Contract (mo)",
+    "Qty",
+    "Svc. days",
+    "Participation",
+    "Nature of work",
+    "Scope of work",
+    "Technical status",
+    "Our status",
+]
+
+
+def _fmt_money_cell(v: float | None) -> str:
+    if v is None:
+        return "-"
+    return f"{v:,.2f}"
+
+
+def _truncate_cell(text: str | None, max_len: int = 100) -> str:
+    if not text:
+        return "-"
+    s = " ".join(str(text).split())
+    if len(s) <= max_len:
+        return s
+    return s[: max_len - 1] + "…"
+
 
 def _qdate(d: date | None) -> QDate:
     if d is None:
@@ -351,24 +395,7 @@ class TendersView(QWidget):
         bar.addWidget(self.refresh_btn)
         layout.addLayout(bar)
 
-        self.table = make_table(
-            [
-                "",
-                "Due",
-                "Firm",
-                "Bid No.",
-                "Organisation",
-                "Dept",
-                "Nature",
-                "Mo.",
-                "Qty",
-                "Value",
-                "Pub. rate",
-                "Participation",
-                "Our status",
-            ],
-            extended_selection=True,
-        )
+        self.table = make_table(TENDER_TABLE_COLUMNS, extended_selection=True)
         self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         self.table.horizontalHeader().setStretchLastSection(True)
@@ -428,7 +455,23 @@ class TendersView(QWidget):
             rows = []
             for t in tenders:
                 hay = " ".join(
-                    filter(None, [t.bid_no, t.organisation, t.department, t.location])
+                    filter(
+                        None,
+                        [
+                            t.bid_no,
+                            t.organisation,
+                            t.department,
+                            t.location,
+                            t.portal,
+                            t.category,
+                            t.state,
+                            t.nature_of_work,
+                            t.scope_of_work,
+                            t.participation_status,
+                            t.technical_status,
+                            t.firm.name if t.firm else None,
+                        ],
+                    )
                 ).lower()
                 if needle and needle not in hay:
                     continue
@@ -441,8 +484,9 @@ class TendersView(QWidget):
             self.table.setSortingEnabled(False)
             self.table.setRowCount(len(rows))
             for r, t in enumerate(rows):
-                due = t.due_date.isoformat() if t.due_date else "-"
                 firm = t.firm.name if t.firm else "-"
+                pub = t.publish_date.isoformat() if t.publish_date else "-"
+                due = t.due_date.isoformat() if t.due_date else "-"
                 sel = QTableWidgetItem("")
                 sel.setFlags(
                     sel.flags()
@@ -452,35 +496,50 @@ class TendersView(QWidget):
                 sel.setCheckState(Qt.CheckState.Unchecked)
                 sel.setData(Qt.ItemDataRole.UserRole, t.id)
                 self.table.setItem(r, 0, sel)
-                self.table.setItem(r, 1, QTableWidgetItem(due))
-                self.table.setItem(r, 2, QTableWidgetItem(firm))
-                self.table.setItem(r, 3, QTableWidgetItem(t.bid_no or "-"))
-                self.table.setItem(r, 4, QTableWidgetItem(t.organisation or "-"))
-                self.table.setItem(r, 5, QTableWidgetItem(t.department or "-"))
-                self.table.setItem(r, 6, QTableWidgetItem(t.nature_of_work or "-"))
-                cpm = t.contract_period_months
-                self.table.setItem(
-                    r, 7, QTableWidgetItem(f"{cpm:g}" if cpm is not None else "-")
-                )
-                qty = t.quantity
-                self.table.setItem(
-                    r, 8, QTableWidgetItem(f"{qty:g}" if qty is not None else "-")
-                )
-                self.table.setItem(
-                    r,
-                    9,
-                    QTableWidgetItem(
-                        f"{t.tender_value:,.0f}" if t.tender_value is not None else "-"
-                    ),
-                )
+                self.table.setItem(r, 1, QTableWidgetItem(firm))
+                self.table.setItem(r, 2, QTableWidgetItem(t.bid_no or "-"))
+                self.table.setItem(r, 3, QTableWidgetItem(t.organisation or "-"))
+                self.table.setItem(r, 4, QTableWidgetItem(t.portal or "-"))
+                self.table.setItem(r, 5, QTableWidgetItem(t.category or "-"))
+                self.table.setItem(r, 6, QTableWidgetItem(t.department or "-"))
+                self.table.setItem(r, 7, QTableWidgetItem(t.state or "-"))
+                self.table.setItem(r, 8, QTableWidgetItem(t.location or "-"))
+                self.table.setItem(r, 9, QTableWidgetItem(pub))
+                self.table.setItem(r, 10, QTableWidgetItem(due))
+                self.table.setItem(r, 11, QTableWidgetItem(_fmt_money_cell(t.tender_value)))
+                self.table.setItem(r, 12, QTableWidgetItem(_fmt_money_cell(t.emd)))
+                self.table.setItem(r, 13, QTableWidgetItem(_fmt_money_cell(t.document_fee)))
+                self.table.setItem(r, 14, QTableWidgetItem(_fmt_money_cell(t.processing_fee)))
                 er = effective_publish_rate(t)
                 self.table.setItem(
                     r,
-                    10,
+                    15,
                     QTableWidgetItem(f"{er:,.4f}" if er is not None else "-"),
                 )
-                self.table.setItem(r, 11, QTableWidgetItem(t.participation_status or "-"))
-                self.table.setItem(r, 12, QTableWidgetItem(t.our_status or "-"))
+                self.table.setItem(r, 16, QTableWidgetItem(_fmt_money_cell(t.quoted_rates)))
+                cpm = t.contract_period_months
+                self.table.setItem(
+                    r, 17, QTableWidgetItem(f"{cpm:g}" if cpm is not None else "-")
+                )
+                qty = t.quantity
+                self.table.setItem(
+                    r, 18, QTableWidgetItem(f"{qty:g}" if qty is not None else "-")
+                )
+                sd = getattr(t, "service_days", None)
+                self.table.setItem(
+                    r,
+                    19,
+                    QTableWidgetItem(f"{sd:g}" if sd is not None else "-"),
+                )
+                self.table.setItem(r, 20, QTableWidgetItem(t.participation_status or "-"))
+                self.table.setItem(r, 21, QTableWidgetItem(t.nature_of_work or "-"))
+                scope_txt = t.scope_of_work or ""
+                scope_item = QTableWidgetItem(_truncate_cell(t.scope_of_work))
+                if scope_txt and len(scope_txt) > 100:
+                    scope_item.setToolTip(scope_txt.replace("\n", " "))
+                self.table.setItem(r, 22, scope_item)
+                self.table.setItem(r, 23, QTableWidgetItem(t.technical_status or "-"))
+                self.table.setItem(r, 24, QTableWidgetItem(t.our_status or "-"))
 
                 # Color Coding
                 from datetime import date

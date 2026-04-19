@@ -12,9 +12,23 @@ from datetime import datetime
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
-    QDialog, QFrame, QGraphicsDropShadowEffect, QGridLayout, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QProgressBar, QPushButton, QSizePolicy,
-    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget, QScrollArea,
+    QAbstractItemView,
+    QDialog,
+    QFrame,
+    QGraphicsDropShadowEffect,
+    QGridLayout,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QProgressBar,
+    QPushButton,
+    QSizePolicy,
+    QScrollArea,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ..db import session_scope
@@ -109,6 +123,18 @@ class KPICard(Card):
 
 class DrillDownDialog(QDialog):
     """Modal popup showing filtered records when a dashboard widget is clicked."""
+
+    @staticmethod
+    def _normalize_row(row_data: list, num_cols: int) -> list[str]:
+        """Pad or trim so each row has exactly ``num_cols`` cells (Qt needs stable width)."""
+        out: list[str] = []
+        for c in range(num_cols):
+            if c < len(row_data):
+                out.append(str(row_data[c]))
+            else:
+                out.append("")
+        return out
+
     def __init__(self, title: str, columns: list[str], rows: list[list[str]], parent=None):
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -127,27 +153,31 @@ class DrillDownDialog(QDialog):
         # Filter
         self.filter_input = QLineEdit()
         self.filter_input.setPlaceholderText("Type to filter...")
-        self.filter_input.textChanged.connect(lambda: self._apply_filter())
+        self.filter_input.textChanged.connect(self._apply_filter)
         layout.addWidget(self.filter_input)
 
-        # Table
-        self.table = QTableWidget(len(rows), len(columns))
+        self._columns = columns
+        ncol = len(columns)
+        self._all_rows: list[list[str]] = [self._normalize_row(list(r), ncol) for r in rows]
+
+        # Table — sorting must stay OFF while filling or Qt hides cells until refresh (e.g. after filter).
+        self.table = QTableWidget(len(self._all_rows), ncol)
         self.table.setHorizontalHeaderLabels(columns)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.table.setShowGrid(False)
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
+        self.table.setSortingEnabled(False)
+        for r, row_data in enumerate(self._all_rows):
+            for c, cell in enumerate(row_data):
+                self.table.setItem(r, c, QTableWidgetItem(cell))
         self.table.setSortingEnabled(True)
 
-        for r, row_data in enumerate(rows):
-            for c, cell in enumerate(row_data):
-                self.table.setItem(r, c, QTableWidgetItem(str(cell)))
-
         layout.addWidget(self.table)
-        self._all_rows = rows
-        self._columns = columns
 
         # Close button
         close_btn = QPushButton("Close")
@@ -156,12 +186,17 @@ class DrillDownDialog(QDialog):
 
     def _apply_filter(self):
         needle = self.filter_input.text().strip().lower()
-        filtered = [r for r in self._all_rows if not needle or any(needle in str(c).lower() for c in r)]
+        ncol = len(self._columns)
+        filtered = [
+            r
+            for r in self._all_rows
+            if not needle or any(needle in str(c).lower() for c in r)
+        ]
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(filtered))
         for r, row_data in enumerate(filtered):
-            for c, cell in enumerate(row_data):
-                self.table.setItem(r, c, QTableWidgetItem(str(cell)))
+            for c in range(ncol):
+                self.table.setItem(r, c, QTableWidgetItem(row_data[c]))
         self.table.setSortingEnabled(True)
 
 
@@ -513,10 +548,37 @@ class DashboardView(QWidget):
                 .all()
                 if is_participating_status(t.participation_status)
             ]
-            rows = [[t.bid_no or "-", t.organisation or "-", t.firm.name if t.firm else "-",
-                      f"₹{t.tender_value:,.0f}" if t.tender_value else "-",
-                      t.our_status or "-"] for t in tenders]
-        DrillDownDialog("Total Tenders Participated", ["Bid No", "Organisation", "Firm", "Value", "Status"], rows, self).exec()
+            from ..services.tender_rates import effective_publish_rate
+
+            rows = []
+            for t in tenders:
+                er = effective_publish_rate(t)
+                cpm = t.contract_period_months
+                rows.append(
+                    [
+                        t.bid_no or "-",
+                        t.organisation or "-",
+                        t.firm.name if t.firm else "-",
+                        f"₹{t.tender_value:,.0f}" if t.tender_value else "-",
+                        f"{cpm:g}" if cpm is not None else "-",
+                        f"{er:,.4f}" if er is not None else "-",
+                        t.our_status or "-",
+                    ]
+                )
+        DrillDownDialog(
+            "Total Tenders Participated",
+            [
+                "Bid No",
+                "Organisation",
+                "Firm",
+                "Value",
+                "Contract (mo)",
+                "Publish rate",
+                "Status",
+            ],
+            rows,
+            self,
+        ).exec()
 
     def _drill_due_7d(self):
         rows = [[r.bid_no or "-", r.organisation or "-", r.firm_name,
