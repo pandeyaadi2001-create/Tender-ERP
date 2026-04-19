@@ -334,10 +334,16 @@ class TendersView(QWidget):
             if item:
                 item.setForeground(brush)
 
+    def _participation_filter_value(self) -> str:
+        """Participation dropdown: index 0 is 'all' (UserRole data is '' which is falsy — do not use ``or currentText()``)."""
+        if self.status_filter.currentIndex() == 0:
+            return ""
+        return (self.status_filter.currentText() or "").strip()
+
     def refresh(self) -> None:
         needle = (self.filter.text() or "").strip().lower()
-        status_filter = self.status_filter.currentData() or self.status_filter.currentText()
-        
+        status_filter = self._participation_filter_value()
+
         with session_scope() as session:
             q = session.query(Tender).order_by(Tender.due_date.asc().nullslast())
             tenders = q.all()
@@ -348,8 +354,10 @@ class TendersView(QWidget):
                 ).lower()
                 if needle and needle not in hay:
                     continue
-                if status_filter and t.participation_status != status_filter:
-                    continue
+                if status_filter:
+                    t_status = (t.participation_status or "").strip().lower()
+                    if t_status != status_filter.lower():
+                        continue
                 rows.append(t)
             
             self.table.setSortingEnabled(False)

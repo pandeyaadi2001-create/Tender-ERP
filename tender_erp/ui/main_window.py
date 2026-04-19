@@ -68,6 +68,7 @@ class MainWindow(QMainWindow):
         global_bus.dataChanged.connect(self.estamps.refresh)
         global_bus.dataChanged.connect(self.rules.refresh)
         if session_state.user.is_admin:
+            global_bus.dataChanged.connect(self.vault.refresh)
             global_bus.dataChanged.connect(self.users.refresh)
 
         # Idle timeout watcher — touches on every user action.

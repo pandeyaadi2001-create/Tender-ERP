@@ -139,6 +139,7 @@ class ImportDialog(QDialog):
         
         self.log_view.append(f"<b>Starting import for {module}...</b>")
         
+        refresh_views = False
         try:
             with session_scope() as session:
                 success_count, errors = process_import(session, module, mapping, self.excel_data)
@@ -151,9 +152,13 @@ class ImportDialog(QDialog):
                         self.log_view.append(f"<span style='color:red;'>...and {len(errors) - 20} more errors.</span>")
                 else:
                     self.log_view.append(f"<span style='color:green;'><b>Successfully imported {success_count} records!</b></span>")
-                    # Tell all UI views to refresh their data grids
-                    global_bus.dataChanged.emit()
+                    refresh_views = True
                     
         except Exception as e:
             self.log_view.append(f"<span style='color:red;'><b>Critical Error:</b> {str(e)}</span>")
             self.log_view.append(traceback.format_exc())
+            return
+
+        # After session_scope exits so the commit from process_import is fully settled.
+        if refresh_views:
+            global_bus.dataChanged.emit()
