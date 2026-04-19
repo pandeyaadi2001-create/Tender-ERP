@@ -18,6 +18,7 @@ from ..models.firm import Firm
 from ..models.tender import Tender
 from ..models.user import Role
 from .auth import create_user
+from .tender_rates import computed_publish_rate_fields
 
 # Text values commonly used in EMD column instead of numbers (India tenders).
 _EMD_NON_NUMERIC = frozenset(
@@ -249,6 +250,8 @@ def process_import(
                     "publish_rate",
                     "quoted_rates",
                     "contract_period_months",
+                    "quantity",
+                    "service_days",
                 ):
                     if num_col not in mapped_row:
                         continue
@@ -271,6 +274,19 @@ def process_import(
                     continue
 
                 tender_kw = _only_model_columns(Tender, mapped_row)
+                cpm = tender_kw.get("contract_period_months")
+                period_fallback = (float(cpm) * 30.0) if cpm else None
+                auto_pr = computed_publish_rate_fields(
+                    tender_value=tender_kw.get("tender_value"),
+                    quantity=tender_kw.get("quantity"),
+                    nature_of_work=tender_kw.get("nature_of_work"),
+                    category=tender_kw.get("category"),
+                    contract_period_months=tender_kw.get("contract_period_months"),
+                    service_days=tender_kw.get("service_days"),
+                    period_in_days_fallback=period_fallback,
+                )
+                if auto_pr is not None:
+                    tender_kw["publish_rate"] = auto_pr
                 session.add(Tender(**tender_kw))
 
             elif module == "Users":

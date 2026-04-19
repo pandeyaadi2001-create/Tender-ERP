@@ -12,10 +12,26 @@ from datetime import date, datetime
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout,
-    QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
-    QMessageBox, QPushButton, QSpinBox, QTableWidgetItem, QTextEdit,
-    QVBoxLayout, QWidget, QTabBar,
+    QAbstractItemView,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QSpinBox,
+    QTableWidgetItem,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+    QTabBar,
 )
 
 from ..db import session_scope
@@ -433,11 +449,25 @@ class EstampsView(QWidget):
         layout.addWidget(self.status_tabs)
 
         # Table — actual cost is primary, face value shown for reference
-        self.table = make_table([
-            "Denomination", "Qty", "Status", "Firm",
-            "Actual Cost/Stamp", "Total Cost", "Face Value",
-            "Purchase Date", "Vendor", "Voucher #",
-        ])
+        self.table = make_table(
+            [
+                "",
+                "Denomination",
+                "Qty",
+                "Status",
+                "Firm",
+                "Actual Cost/Stamp",
+                "Total Cost",
+                "Face Value",
+                "Purchase Date",
+                "Vendor",
+                "Voucher #",
+            ],
+            extended_selection=True,
+        )
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.table.horizontalHeader().setStretchLastSection(True)
         self.table.doubleClicked.connect(self._edit)
         layout.addWidget(self.table)
 
@@ -447,8 +477,11 @@ class EstampsView(QWidget):
         self.edit_btn.setStyleSheet("font-weight: 600;")
         self.delete_btn = QPushButton("✕ Delete")
         self.delete_btn.setObjectName("dangerBtn")
+        self.delete_many_btn = QPushButton("Delete selected")
+        self.delete_many_btn.setObjectName("dangerBtn")
         action_bar.addWidget(self.edit_btn)
         action_bar.addWidget(self.delete_btn)
+        action_bar.addWidget(self.delete_many_btn)
         action_bar.addStretch()
         layout.addLayout(action_bar)
 
@@ -459,6 +492,7 @@ class EstampsView(QWidget):
         self.import_btn.clicked.connect(self._open_import)
         self.edit_btn.clicked.connect(self._edit)
         self.delete_btn.clicked.connect(self._delete)
+        self.delete_many_btn.clicked.connect(self._delete_many)
 
         self.refresh()
 
@@ -484,6 +518,16 @@ class EstampsView(QWidget):
             return None
         item = self.table.item(row, 0)
         return int(item.data(Qt.ItemDataRole.UserRole)) if item else None
+
+    def _checked_ids(self) -> list[int]:
+        out: list[int] = []
+        for r in range(self.table.rowCount()):
+            it = self.table.item(r, 0)
+            if it and it.checkState() == Qt.CheckState.Checked:
+                rid = it.data(Qt.ItemDataRole.UserRole)
+                if rid is not None:
+                    out.append(int(rid))
+        return out
 
     def refresh(self) -> None:
         tab_idx = self.status_tabs.currentIndex()
@@ -517,38 +561,50 @@ class EstampsView(QWidget):
             self.table.setSortingEnabled(False)
             self.table.setRowCount(len(rows))
             for r, e in enumerate(rows):
+                sel = QTableWidgetItem("")
+                sel.setFlags(
+                    sel.flags()
+                    | Qt.ItemFlag.ItemIsUserCheckable
+                    | Qt.ItemFlag.ItemIsEnabled
+                )
+                sel.setCheckState(Qt.CheckState.Unchecked)
+                sel.setData(Qt.ItemDataRole.UserRole, e.id)
+                self.table.setItem(r, 0, sel)
+
                 denom_item = QTableWidgetItem(f"₹{e.denomination or e.unit_rate:,.0f}")
-                denom_item.setData(Qt.ItemDataRole.UserRole, e.id)
-                self.table.setItem(r, 0, denom_item)
-                self.table.setItem(r, 1, QTableWidgetItem(str(e.quantity)))
+                self.table.setItem(r, 1, denom_item)
+                self.table.setItem(r, 2, QTableWidgetItem(str(e.quantity)))
 
                 status_label = STATUS_LABELS.get(e.status, e.status.title())
                 status_item = QTableWidgetItem(status_label)
                 colors = {
-                    "pending": "#D97706", "purchased": "#16A34A",
-                    "allocated": "#2563EB", "used": "#6B7280", "cancelled": "#DC2626"
+                    "pending": "#D97706",
+                    "purchased": "#16A34A",
+                    "allocated": "#2563EB",
+                    "used": "#6B7280",
+                    "cancelled": "#DC2626",
                 }
                 status_item.setForeground(QBrush(QColor(colors.get(e.status, "#1A1D23"))))
-                self.table.setItem(r, 2, status_item)
+                self.table.setItem(r, 3, status_item)
 
-                self.table.setItem(r, 3, QTableWidgetItem(e.firm.name if e.firm else "-"))
+                self.table.setItem(r, 4, QTableWidgetItem(e.firm.name if e.firm else "-"))
 
-                # Actual cost per stamp
                 if e.actual_cost is not None:
-                    self.table.setItem(r, 4, QTableWidgetItem(f"₹{e.actual_cost:,.2f}"))
+                    self.table.setItem(r, 5, QTableWidgetItem(f"₹{e.actual_cost:,.2f}"))
                 else:
-                    self.table.setItem(r, 4, QTableWidgetItem("-"))
+                    self.table.setItem(r, 5, QTableWidgetItem("-"))
 
-                # Total actual cost
-                self.table.setItem(r, 5, QTableWidgetItem(f"₹{e.actual_cost_total:,.2f}"))
+                self.table.setItem(r, 6, QTableWidgetItem(f"₹{e.actual_cost_total:,.2f}"))
 
-                # Face value (de-prioritized, shown for reference)
-                self.table.setItem(r, 6, QTableWidgetItem(f"₹{e.face_value_total:,.2f}"))
+                self.table.setItem(r, 7, QTableWidgetItem(f"₹{e.face_value_total:,.2f}"))
 
-                self.table.setItem(r, 7, QTableWidgetItem(
-                    e.purchase_date.isoformat() if e.purchase_date else "-"))
-                self.table.setItem(r, 8, QTableWidgetItem(e.vendor or "-"))
-                self.table.setItem(r, 9, QTableWidgetItem(e.voucher_number or "-"))
+                self.table.setItem(
+                    r,
+                    8,
+                    QTableWidgetItem(e.purchase_date.isoformat() if e.purchase_date else "-"),
+                )
+                self.table.setItem(r, 9, QTableWidgetItem(e.vendor or "-"))
+                self.table.setItem(r, 10, QTableWidgetItem(e.voucher_number or "-"))
 
             self.table.setSortingEnabled(True)
 
@@ -594,6 +650,35 @@ class EstampsView(QWidget):
                                  record_id=e.id, action="delete",
                                  old={"denomination": e.denomination, "status": e.status, "qty": e.quantity})
                 session.delete(e)
+        self.refresh()
+        global_bus.dataChanged.emit()
+
+    def _delete_many(self):
+        ids = self._checked_ids()
+        if not ids:
+            QMessageBox.information(self, "Select", "Tick one or more rows in the first column.")
+            return
+        confirm = QMessageBox.question(
+            self,
+            "Confirm Delete",
+            f"Delete {len(ids)} selected e-stamp entr(y/ies)?\n\nThis cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        with session_scope() as session:
+            for eid in ids:
+                e = session.get(Estamp, eid)
+                if e:
+                    audit_svc.record(
+                        session,
+                        user_id=None,
+                        table="estamps",
+                        record_id=e.id,
+                        action="delete",
+                        old={"denomination": e.denomination, "status": e.status, "qty": e.quantity},
+                    )
+                    session.delete(e)
         self.refresh()
         global_bus.dataChanged.emit()
 

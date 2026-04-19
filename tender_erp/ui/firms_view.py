@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QAbstractItemView, QHeaderView
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -128,20 +129,29 @@ class FirmsView(QWidget):
         self.new_btn = QPushButton("New firm")
         self.edit_btn = QPushButton("Edit")
         self.archive_btn = QPushButton("Archive")
+        self.archive_many_btn = QPushButton("Archive selected")
         self.refresh_btn = QPushButton("Refresh")
         bar.addWidget(self.new_btn)
         bar.addWidget(self.edit_btn)
         bar.addWidget(self.archive_btn)
+        bar.addWidget(self.archive_many_btn)
         bar.addStretch(1)
         bar.addWidget(self.refresh_btn)
         layout.addLayout(bar)
 
-        self.table = make_table(["Name", "GSTIN", "PAN", "Udyam", "Contact", "Archived"])
+        self.table = make_table(
+            ["", "Name", "GSTIN", "PAN", "Udyam", "Contact", "Archived"],
+            extended_selection=True,
+        )
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.table)
 
         self.new_btn.clicked.connect(self._new)
         self.edit_btn.clicked.connect(self._edit)
         self.archive_btn.clicked.connect(self._archive)
+        self.archive_many_btn.clicked.connect(self._archive_many)
         self.refresh_btn.clicked.connect(self.refresh)
         self.refresh()
 
@@ -152,19 +162,36 @@ class FirmsView(QWidget):
         item = self.table.item(row, 0)
         return int(item.data(Qt.ItemDataRole.UserRole)) if item else None
 
+    def _checked_firm_ids(self) -> list[int]:
+        out: list[int] = []
+        for r in range(self.table.rowCount()):
+            it = self.table.item(r, 0)
+            if it and it.checkState() == Qt.CheckState.Checked:
+                rid = it.data(Qt.ItemDataRole.UserRole)
+                if rid is not None:
+                    out.append(int(rid))
+        return out
+
     def refresh(self) -> None:
         with session_scope() as session:
             firms = session.query(Firm).order_by(Firm.name).all()
             self.table.setRowCount(len(firms))
             for r, f in enumerate(firms):
-                item = QTableWidgetItem(f.name)
-                item.setData(Qt.ItemDataRole.UserRole, f.id)
-                self.table.setItem(r, 0, item)
-                self.table.setItem(r, 1, QTableWidgetItem(f.gstin or "-"))
-                self.table.setItem(r, 2, QTableWidgetItem(f.pan or "-"))
-                self.table.setItem(r, 3, QTableWidgetItem(f.udyam or "-"))
-                self.table.setItem(r, 4, QTableWidgetItem(f.contact_person or "-"))
-                self.table.setItem(r, 5, QTableWidgetItem("yes" if f.is_archived else "no"))
+                sel = QTableWidgetItem("")
+                sel.setFlags(
+                    sel.flags()
+                    | Qt.ItemFlag.ItemIsUserCheckable
+                    | Qt.ItemFlag.ItemIsEnabled
+                )
+                sel.setCheckState(Qt.CheckState.Unchecked)
+                sel.setData(Qt.ItemDataRole.UserRole, f.id)
+                self.table.setItem(r, 0, sel)
+                self.table.setItem(r, 1, QTableWidgetItem(f.name))
+                self.table.setItem(r, 2, QTableWidgetItem(f.gstin or "-"))
+                self.table.setItem(r, 3, QTableWidgetItem(f.pan or "-"))
+                self.table.setItem(r, 4, QTableWidgetItem(f.udyam or "-"))
+                self.table.setItem(r, 5, QTableWidgetItem(f.contact_person or "-"))
+                self.table.setItem(r, 6, QTableWidgetItem("yes" if f.is_archived else "no"))
 
     def _new(self) -> None:
         dlg = FirmEditor(None, self)
@@ -201,5 +228,36 @@ class FirmsView(QWidget):
                 action="update",
                 note="archive toggled",
             )
+        global_bus.dataChanged.emit()
+        self.refresh()
+
+    def _archive_many(self) -> None:
+        ids = self._checked_firm_ids()
+        if not ids:
+            QMessageBox.information(self, "Archive", "Tick one or more rows in the first column.")
+            return
+        if (
+            QMessageBox.question(
+                self,
+                "Archive",
+                f"Toggle archive for {len(ids)} selected firm(s)?",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        with session_scope() as session:
+            for fid in ids:
+                firm = session.get(Firm, fid)
+                if firm is None:
+                    continue
+                firm.is_archived = not firm.is_archived
+                audit_svc.record(
+                    session,
+                    user_id=None,
+                    table="firms",
+                    record_id=firm.id,
+                    action="update",
+                    note="archive toggled (bulk)",
+                )
         global_bus.dataChanged.emit()
         self.refresh()

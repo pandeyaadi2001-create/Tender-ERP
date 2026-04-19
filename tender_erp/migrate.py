@@ -42,6 +42,7 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     ("tenders", "loa_po_number", "VARCHAR(128)"),
     ("tenders", "loa_document", "VARCHAR(1024)"),
     ("tenders", "execution_status", "VARCHAR(64)"),
+    ("tenders", "service_days", "REAL"),
     # ── Firm code & color ──
     ("firms", "firm_code", "VARCHAR(16)"),
     ("firms", "firm_color_hex", "VARCHAR(7)"),

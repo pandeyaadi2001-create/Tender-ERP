@@ -22,6 +22,26 @@ from ..models.tender import Tender
 from ..models.vault import VaultCredential
 
 
+def is_participating_status(status: str | None) -> bool:
+    """True for Participated / Participated in Support; false for Not Participated, Cancelled, empty."""
+    if not status or not str(status).strip():
+        return False
+    s = str(status).strip().lower()
+    if "not participated" in s:
+        return False
+    if s == "cancelled":
+        return False
+    return "participated" in s
+
+
+def count_participating_tenders(session: Session) -> int:
+    return sum(
+        1
+        for t in session.query(Tender).filter(Tender.is_reference == False).all()  # noqa: E712
+        if is_participating_status(t.participation_status)
+    )
+
+
 @dataclass
 class DeadlineRow:
     tender_id: int
@@ -304,12 +324,7 @@ def build_snapshot(session: Session, today: date | None = None) -> DashboardSnap
     firm_count = session.query(Firm).filter(Firm.is_archived == False).count()  # noqa: E712
 
     fy = _current_fy()
-    tenders_participated = (
-        session.query(Tender)
-        .filter(Tender.participation_status == "Participated")
-        .filter(Tender.is_reference == False)  # noqa: E712
-        .count()
-    )
+    tenders_participated = count_participating_tenders(session)
 
     tenders_7d = tenders_due_between(session, min_days=0, max_days=7, today=today)
     critical_count = sum(1 for t in tenders_7d if t.due_in_days is not None and t.due_in_days <= 3)

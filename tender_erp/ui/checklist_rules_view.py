@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -22,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from ..db import session_scope
 from ..models.checklist import ChecklistRule
+from .event_bus import global_bus
 from .widgets import make_table
 
 INSTRUCTIONS = (
@@ -119,22 +122,31 @@ class ChecklistRulesView(QWidget):
         self.new_btn = QPushButton("New rule")
         self.edit_btn = QPushButton("Edit")
         self.delete_btn = QPushButton("Delete")
+        self.delete_many_btn = QPushButton("Delete selected")
         self.seed_btn = QPushButton("Seed starter library")
         self.refresh_btn = QPushButton("Refresh")
         bar.addWidget(self.new_btn)
         bar.addWidget(self.edit_btn)
         bar.addWidget(self.delete_btn)
+        bar.addWidget(self.delete_many_btn)
         bar.addWidget(self.seed_btn)
         bar.addStretch(1)
         bar.addWidget(self.refresh_btn)
         layout.addLayout(bar)
 
-        self.table = make_table(["Name", "Field", "Value", "Required document", "Active"])
+        self.table = make_table(
+            ["", "Name", "Field", "Value", "Required document", "Active"],
+            extended_selection=True,
+        )
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.table)
 
         self.new_btn.clicked.connect(self._new)
         self.edit_btn.clicked.connect(self._edit)
         self.delete_btn.clicked.connect(self._delete)
+        self.delete_many_btn.clicked.connect(self._delete_many)
         self.seed_btn.clicked.connect(self._seed)
         self.refresh_btn.clicked.connect(self.refresh)
         self.refresh()
@@ -146,6 +158,16 @@ class ChecklistRulesView(QWidget):
         item = self.table.item(row, 0)
         return int(item.data(Qt.ItemDataRole.UserRole)) if item else None
 
+    def _checked_ids(self) -> list[int]:
+        out: list[int] = []
+        for r in range(self.table.rowCount()):
+            it = self.table.item(r, 0)
+            if it and it.checkState() == Qt.CheckState.Checked:
+                rid = it.data(Qt.ItemDataRole.UserRole)
+                if rid is not None:
+                    out.append(int(rid))
+        return out
+
     def refresh(self) -> None:
         with session_scope() as session:
             rules = (
@@ -155,13 +177,20 @@ class ChecklistRulesView(QWidget):
             )
             self.table.setRowCount(len(rules))
             for r, rule in enumerate(rules):
-                item = QTableWidgetItem(rule.name)
-                item.setData(Qt.ItemDataRole.UserRole, rule.id)
-                self.table.setItem(r, 0, item)
-                self.table.setItem(r, 1, QTableWidgetItem(rule.condition_field))
-                self.table.setItem(r, 2, QTableWidgetItem(rule.condition_value or "-"))
-                self.table.setItem(r, 3, QTableWidgetItem(rule.required_document))
-                self.table.setItem(r, 4, QTableWidgetItem("yes" if rule.is_active else "no"))
+                sel = QTableWidgetItem("")
+                sel.setFlags(
+                    sel.flags()
+                    | Qt.ItemFlag.ItemIsUserCheckable
+                    | Qt.ItemFlag.ItemIsEnabled
+                )
+                sel.setCheckState(Qt.CheckState.Unchecked)
+                sel.setData(Qt.ItemDataRole.UserRole, rule.id)
+                self.table.setItem(r, 0, sel)
+                self.table.setItem(r, 1, QTableWidgetItem(rule.name))
+                self.table.setItem(r, 2, QTableWidgetItem(rule.condition_field))
+                self.table.setItem(r, 3, QTableWidgetItem(rule.condition_value or "-"))
+                self.table.setItem(r, 4, QTableWidgetItem(rule.required_document))
+                self.table.setItem(r, 5, QTableWidgetItem("yes" if rule.is_active else "no"))
 
     def _new(self) -> None:
         dlg = RuleEditor(None, self)
@@ -190,6 +219,25 @@ class ChecklistRulesView(QWidget):
             if rule is None:
                 return
             session.delete(rule)
+        global_bus.dataChanged.emit()
+        self.refresh()
+
+    def _delete_many(self) -> None:
+        ids = self._checked_ids()
+        if not ids:
+            QMessageBox.information(self, "Delete", "Tick one or more rows in the first column.")
+            return
+        if (
+            QMessageBox.question(self, "Delete", f"Delete {len(ids)} rule(s)?")
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        with session_scope() as session:
+            for rid in ids:
+                rule = session.get(ChecklistRule, rid)
+                if rule is not None:
+                    session.delete(rule)
+        global_bus.dataChanged.emit()
         self.refresh()
 
     def _seed(self) -> None:

@@ -6,12 +6,14 @@ from datetime import date
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
+    QHeaderView,
     QLineEdit,
     QMessageBox,
     QPushButton,
@@ -175,24 +177,41 @@ class ComplianceView(QWidget):
         self.new_btn = QPushButton("New document")
         self.edit_btn = QPushButton("Edit")
         self.delete_btn = QPushButton("Delete")
+        self.delete_many_btn = QPushButton("Delete selected")
         self.import_btn = QPushButton("Import Excel")
         self.refresh_btn = QPushButton("Refresh")
         bar.addWidget(self.new_btn)
         bar.addWidget(self.edit_btn)
         bar.addWidget(self.delete_btn)
+        bar.addWidget(self.delete_many_btn)
         bar.addWidget(self.import_btn)
         bar.addStretch(1)
         bar.addWidget(self.refresh_btn)
         layout.addLayout(bar)
 
         self.table = make_table(
-            ["Firm", "Name", "Type", "Cert No.", "Issue", "Expiry", "Days", "Status"]
+            [
+                "",
+                "Firm",
+                "Name",
+                "Type",
+                "Cert No.",
+                "Issue",
+                "Expiry",
+                "Days",
+                "Status",
+            ],
+            extended_selection=True,
         )
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.table)
 
         self.new_btn.clicked.connect(self._new)
         self.edit_btn.clicked.connect(self._edit)
         self.delete_btn.clicked.connect(self._delete)
+        self.delete_many_btn.clicked.connect(self._delete_many)
         self.import_btn.clicked.connect(self._open_import)
         self.refresh_btn.clicked.connect(self.refresh)
         self.refresh()
@@ -203,6 +222,16 @@ class ComplianceView(QWidget):
             return None
         item = self.table.item(row, 0)
         return int(item.data(Qt.ItemDataRole.UserRole)) if item else None
+
+    def _checked_ids(self) -> list[int]:
+        out: list[int] = []
+        for r in range(self.table.rowCount()):
+            it = self.table.item(r, 0)
+            if it and it.checkState() == Qt.CheckState.Checked:
+                rid = it.data(Qt.ItemDataRole.UserRole)
+                if rid is not None:
+                    out.append(int(rid))
+        return out
 
     def _set_row_color(self, row: int, color: str) -> None:
         from PySide6.QtGui import QColor, QBrush
@@ -221,22 +250,29 @@ class ComplianceView(QWidget):
             )
             self.table.setRowCount(len(docs))
             for r, d in enumerate(docs):
-                item = QTableWidgetItem(d.firm.name if d.firm else "-")
-                item.setData(Qt.ItemDataRole.UserRole, d.id)
-                self.table.setItem(r, 0, item)
-                self.table.setItem(r, 1, QTableWidgetItem(d.document_name))
-                self.table.setItem(r, 2, QTableWidgetItem(d.document_type or "-"))
-                self.table.setItem(r, 3, QTableWidgetItem(d.certificate_no or "-"))
-                self.table.setItem(r, 4, QTableWidgetItem(d.issue_date.isoformat() if d.issue_date else "-"))
-                self.table.setItem(r, 5, QTableWidgetItem(d.expiry_date.isoformat() if d.expiry_date else "-"))
+                sel = QTableWidgetItem("")
+                sel.setFlags(
+                    sel.flags()
+                    | Qt.ItemFlag.ItemIsUserCheckable
+                    | Qt.ItemFlag.ItemIsEnabled
+                )
+                sel.setCheckState(Qt.CheckState.Unchecked)
+                sel.setData(Qt.ItemDataRole.UserRole, d.id)
+                self.table.setItem(r, 0, sel)
+                self.table.setItem(r, 1, QTableWidgetItem(d.firm.name if d.firm else "-"))
+                self.table.setItem(r, 2, QTableWidgetItem(d.document_name))
+                self.table.setItem(r, 3, QTableWidgetItem(d.document_type or "-"))
+                self.table.setItem(r, 4, QTableWidgetItem(d.certificate_no or "-"))
+                self.table.setItem(r, 5, QTableWidgetItem(d.issue_date.isoformat() if d.issue_date else "-"))
+                self.table.setItem(r, 6, QTableWidgetItem(d.expiry_date.isoformat() if d.expiry_date else "-"))
                 self.table.setItem(
                     r,
-                    6,
+                    7,
                     QTableWidgetItem(
                         str(d.days_until_expiry) if d.days_until_expiry is not None else "-"
                     ),
                 )
-                self.table.setItem(r, 7, QTableWidgetItem(d.status))
+                self.table.setItem(r, 8, QTableWidgetItem(d.status))
                 
                 if d.days_until_expiry is not None:
                     if d.days_until_expiry <= 15:
@@ -300,6 +336,36 @@ class ComplianceView(QWidget):
                 record_id=did,
                 action="delete",
             )
+        global_bus.dataChanged.emit()
+        self.refresh()
+
+    def _delete_many(self) -> None:
+        ids = self._checked_ids()
+        if not ids:
+            QMessageBox.information(self, "Delete", "Tick one or more rows in the first column.")
+            return
+        if (
+            QMessageBox.question(
+                self,
+                "Delete",
+                f"Delete {len(ids)} selected document(s)?",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        with session_scope() as session:
+            for did in ids:
+                doc = session.get(ComplianceDocument, did)
+                if doc is None:
+                    continue
+                session.delete(doc)
+                audit_svc.record(
+                    session,
+                    user_id=None,
+                    table="compliance_documents",
+                    record_id=did,
+                    action="delete",
+                )
         global_bus.dataChanged.emit()
         self.refresh()
 

@@ -47,6 +47,8 @@ class Tender(Base, TimestampMixin):
 
     # Commercial
     contract_period_months: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Optional explicit day-count for kitchen publish-rate (overrides months×30).
+    service_days: Mapped[float | None] = mapped_column(Float, nullable=True)
     quantity: Mapped[float | None] = mapped_column(Float, nullable=True)
     publish_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
     tender_value: Mapped[float | None] = mapped_column(Float, nullable=True)

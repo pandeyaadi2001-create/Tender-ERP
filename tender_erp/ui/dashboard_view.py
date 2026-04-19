@@ -503,10 +503,16 @@ class DashboardView(QWidget):
     def _drill_participated(self):
         with session_scope() as session:
             from ..models.tender import Tender
-            tenders = session.query(Tender).filter(
-                Tender.participation_status == "Participated",
-                Tender.is_reference == False,  # noqa: E712
-            ).order_by(Tender.due_date.asc().nullslast()).all()
+            from ..services.dashboard import is_participating_status
+
+            tenders = [
+                t
+                for t in session.query(Tender)
+                .filter(Tender.is_reference == False)  # noqa: E712
+                .order_by(Tender.due_date.asc().nullslast())
+                .all()
+                if is_participating_status(t.participation_status)
+            ]
             rows = [[t.bid_no or "-", t.organisation or "-", t.firm.name if t.firm else "-",
                       f"₹{t.tender_value:,.0f}" if t.tender_value else "-",
                       t.our_status or "-"] for t in tenders]

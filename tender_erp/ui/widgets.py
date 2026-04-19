@@ -30,11 +30,15 @@ def make_money_spin() -> QDoubleSpinBox:
     return spin
 
 
-def make_table(columns: list[str]) -> QTableWidget:
+def make_table(columns: list[str], *, extended_selection: bool = False) -> QTableWidget:
     tbl = QTableWidget(0, len(columns))
     tbl.setHorizontalHeaderLabels(columns)
     tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
     tbl.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-    tbl.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+    tbl.setSelectionMode(
+        QTableWidget.SelectionMode.ExtendedSelection
+        if extended_selection
+        else QTableWidget.SelectionMode.SingleSelection
+    )
     tbl.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
     return tbl

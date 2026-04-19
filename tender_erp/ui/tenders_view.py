@@ -6,15 +6,30 @@ from datetime import date
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
-    QFormLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
-    QPushButton, QTableWidgetItem, QTextEdit, QVBoxLayout, QWidget,
+    QAbstractItemView,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QTableWidgetItem,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ..db import session_scope
 from ..models.firm import Firm
 from ..models.tender import Tender
 from ..services import audit as audit_svc
+from ..services.tender_rates import computed_publish_rate_fields, effective_publish_rate
 from ..services.validators import validate_tender
 from .widgets import make_date_edit, make_money_spin, make_table
 from .event_bus import global_bus
@@ -88,6 +103,24 @@ class TenderEditor(QDialog):
         if tender and tender.contract_period_months is not None:
             self.contract_months.setValue(tender.contract_period_months)
 
+        self.quantity = QDoubleSpinBox()
+        self.quantity.setDecimals(4)
+        self.quantity.setMaximum(1e12)
+        self.quantity.setMinimum(0)
+        if tender and tender.quantity is not None:
+            self.quantity.setValue(tender.quantity)
+        else:
+            self.quantity.setValue(0)
+
+        self.service_days = QDoubleSpinBox()
+        self.service_days.setDecimals(1)
+        self.service_days.setMaximum(1e6)
+        self.service_days.setMinimum(0)
+        if tender and getattr(tender, "service_days", None) is not None:
+            self.service_days.setValue(tender.service_days)
+        else:
+            self.service_days.setValue(0)
+
         self.participation_cb = QComboBox()
         self.participation_cb.addItems(PARTICIPATION_CHOICES)
         if tender and tender.participation_status:
@@ -156,6 +189,8 @@ class TenderEditor(QDialog):
         form.addRow("Publish rate", self.publish_rate)
         form.addRow("Quoted rates", self.quoted_rates)
         form.addRow("Contract period (months)", self.contract_months)
+        form.addRow("Quantity (diet/day or kg/mo)", self.quantity)
+        form.addRow("Service days (kitchen, optional)", self.service_days)
         form.addRow("Participation", self.participation_cb)
         form.addRow("Nature of work", self.nature)
         form.addRow("Scope of work", self.scope)
@@ -197,6 +232,12 @@ class TenderEditor(QDialog):
             w.setVisible(checked)
 
     def _save(self) -> None:
+        qv = self.quantity.value()
+        qty = None if qv <= 0 else qv
+        sdv = self.service_days.value()
+        service_days = None if sdv <= 0 else sdv
+        cpm = self.contract_months.value() or None
+        period_fallback = (cpm * 30.0) if cpm else None
         payload = dict(
             firm_id=self.firm_cb.currentData(),
             bid_no=self.bid_no.text(),
@@ -214,7 +255,9 @@ class TenderEditor(QDialog):
             processing_fee=self.processing_fee.value() or None,
             publish_rate=self.publish_rate.value() or None,
             quoted_rates=self.quoted_rates.value() or None,
-            contract_period_months=self.contract_months.value() or None,
+            contract_period_months=cpm,
+            quantity=qty,
+            service_days=service_days,
             participation_status=self.participation_cb.currentText() or None,
             nature_of_work=self.nature.text() or None,
             scope_of_work=self.scope.toPlainText() or None,
@@ -228,6 +271,17 @@ class TenderEditor(QDialog):
             loa_po_number=self.loa_po.text() or None,
             execution_status=self.exec_status_cb.currentText() or None,
         )
+        auto_pr = computed_publish_rate_fields(
+            tender_value=payload.get("tender_value"),
+            quantity=payload.get("quantity"),
+            nature_of_work=payload.get("nature_of_work"),
+            category=payload.get("category"),
+            contract_period_months=payload.get("contract_period_months"),
+            service_days=payload.get("service_days"),
+            period_in_days_fallback=period_fallback,
+        )
+        if auto_pr is not None:
+            payload["publish_rate"] = auto_pr
         errors = validate_tender(payload)
         if errors:
             QMessageBox.warning(self, "Validation", "\n".join(errors))
@@ -273,6 +327,7 @@ class TendersView(QWidget):
         self.new_btn = QPushButton("New tender")
         self.edit_btn = QPushButton("Edit")
         self.delete_btn = QPushButton("Delete")
+        self.delete_many_btn = QPushButton("Delete selected")
         self.import_btn = QPushButton("Import Excel")
         self.generate_btn = QPushButton("Generate submission checklist")
         self.refresh_btn = QPushButton("Refresh")
@@ -287,6 +342,7 @@ class TendersView(QWidget):
         bar.addWidget(self.new_btn)
         bar.addWidget(self.edit_btn)
         bar.addWidget(self.delete_btn)
+        bar.addWidget(self.delete_many_btn)
         bar.addWidget(self.import_btn)
         bar.addWidget(self.generate_btn)
         bar.addWidget(self.filter)
@@ -297,21 +353,31 @@ class TendersView(QWidget):
 
         self.table = make_table(
             [
+                "",
                 "Due",
                 "Firm",
                 "Bid No.",
                 "Organisation",
-                "Department",
+                "Dept",
+                "Nature",
+                "Mo.",
+                "Qty",
                 "Value",
+                "Pub. rate",
                 "Participation",
-                "Status",
-            ]
+                "Our status",
+            ],
+            extended_selection=True,
         )
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.table)
 
         self.new_btn.clicked.connect(self._new)
         self.edit_btn.clicked.connect(self._edit)
         self.delete_btn.clicked.connect(self._delete)
+        self.delete_many_btn.clicked.connect(self._delete_many)
         self.import_btn.clicked.connect(self._open_import)
         self.generate_btn.clicked.connect(self._generate_checklist)
         self.refresh_btn.clicked.connect(self.refresh)
@@ -325,6 +391,18 @@ class TendersView(QWidget):
             return None
         item = self.table.item(row, 0)
         return int(item.data(Qt.ItemDataRole.UserRole)) if item else None
+
+    def _checked_ids(self) -> list[int]:
+        ids: list[int] = []
+        for r in range(self.table.rowCount()):
+            it = self.table.item(r, 0)
+            if it is None:
+                continue
+            if it.checkState() == Qt.CheckState.Checked:
+                rid = it.data(Qt.ItemDataRole.UserRole)
+                if rid is not None:
+                    ids.append(int(rid))
+        return ids
 
     def _set_row_color(self, row: int, color: str) -> None:
         from PySide6.QtGui import QColor, QBrush
@@ -365,33 +443,56 @@ class TendersView(QWidget):
             for r, t in enumerate(rows):
                 due = t.due_date.isoformat() if t.due_date else "-"
                 firm = t.firm.name if t.firm else "-"
-                item = QTableWidgetItem(due)
-                item.setData(Qt.ItemDataRole.UserRole, t.id)
-                self.table.setItem(r, 0, item)
-                self.table.setItem(r, 1, QTableWidgetItem(firm))
-                self.table.setItem(r, 2, QTableWidgetItem(t.bid_no or "-"))
-                self.table.setItem(r, 3, QTableWidgetItem(t.organisation or "-"))
-                self.table.setItem(r, 4, QTableWidgetItem(t.department or "-"))
+                sel = QTableWidgetItem("")
+                sel.setFlags(
+                    sel.flags()
+                    | Qt.ItemFlag.ItemIsUserCheckable
+                    | Qt.ItemFlag.ItemIsEnabled
+                )
+                sel.setCheckState(Qt.CheckState.Unchecked)
+                sel.setData(Qt.ItemDataRole.UserRole, t.id)
+                self.table.setItem(r, 0, sel)
+                self.table.setItem(r, 1, QTableWidgetItem(due))
+                self.table.setItem(r, 2, QTableWidgetItem(firm))
+                self.table.setItem(r, 3, QTableWidgetItem(t.bid_no or "-"))
+                self.table.setItem(r, 4, QTableWidgetItem(t.organisation or "-"))
+                self.table.setItem(r, 5, QTableWidgetItem(t.department or "-"))
+                self.table.setItem(r, 6, QTableWidgetItem(t.nature_of_work or "-"))
+                cpm = t.contract_period_months
+                self.table.setItem(
+                    r, 7, QTableWidgetItem(f"{cpm:g}" if cpm is not None else "-")
+                )
+                qty = t.quantity
+                self.table.setItem(
+                    r, 8, QTableWidgetItem(f"{qty:g}" if qty is not None else "-")
+                )
                 self.table.setItem(
                     r,
-                    5,
+                    9,
                     QTableWidgetItem(
                         f"{t.tender_value:,.0f}" if t.tender_value is not None else "-"
                     ),
                 )
-                self.table.setItem(r, 6, QTableWidgetItem(t.participation_status or "-"))
-                self.table.setItem(r, 7, QTableWidgetItem(t.our_status or "-"))
-                
+                er = effective_publish_rate(t)
+                self.table.setItem(
+                    r,
+                    10,
+                    QTableWidgetItem(f"{er:,.4f}" if er is not None else "-"),
+                )
+                self.table.setItem(r, 11, QTableWidgetItem(t.participation_status or "-"))
+                self.table.setItem(r, 12, QTableWidgetItem(t.our_status or "-"))
+
                 # Color Coding
                 from datetime import date
+
                 if t.due_date:
                     days_left = (t.due_date - date.today()).days
                     if days_left <= 3:
-                        self._set_row_color(r, "#ef4444") # Red
+                        self._set_row_color(r, "#ef4444")  # Red
                     elif days_left <= 7:
-                        self._set_row_color(r, "#eab308") # Yellow
+                        self._set_row_color(r, "#eab308")  # Yellow
                     else:
-                        self._set_row_color(r, "#22c55e") # Green
+                        self._set_row_color(r, "#22c55e")  # Green
             self.table.setSortingEnabled(True)
 
     def _open_editor(self, tender: Tender | None) -> None:
@@ -444,6 +545,34 @@ class TendersView(QWidget):
                 record_id=tid,
                 action="delete",
             )
+        global_bus.dataChanged.emit()
+        self.refresh()
+
+    def _delete_many(self) -> None:
+        ids = self._checked_ids()
+        if not ids:
+            QMessageBox.information(self, "Delete", "Tick one or more rows in the first column.")
+            return
+        confirm = QMessageBox.question(
+            self,
+            "Delete",
+            f"Delete {len(ids)} selected tender(s)?",
+        )
+        if confirm != QMessageBox.StandardButton.Yes:
+            return
+        with session_scope() as session:
+            for tid in ids:
+                tender = session.get(Tender, tid)
+                if tender is None:
+                    continue
+                session.delete(tender)
+                audit_svc.record(
+                    session,
+                    user_id=None,
+                    table="tenders",
+                    record_id=tid,
+                    action="delete",
+                )
         global_bus.dataChanged.emit()
         self.refresh()
 

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
+    QHeaderView,
     QLineEdit,
     QMessageBox,
     QPushButton,
@@ -21,6 +23,7 @@ from PySide6.QtWidgets import (
 from ..db import session_scope
 from ..models.user import Role, User
 from ..services import auth
+from .event_bus import global_bus
 from .widgets import make_table
 
 
@@ -114,18 +117,30 @@ class UsersView(QWidget):
         bar = QHBoxLayout()
         self.new_btn = QPushButton("New user")
         self.edit_btn = QPushButton("Edit")
+        self.delete_btn = QPushButton("Delete")
+        self.delete_many_btn = QPushButton("Delete selected")
         self.refresh_btn = QPushButton("Refresh")
         bar.addWidget(self.new_btn)
         bar.addWidget(self.edit_btn)
+        bar.addWidget(self.delete_btn)
+        bar.addWidget(self.delete_many_btn)
         bar.addStretch(1)
         bar.addWidget(self.refresh_btn)
         layout.addLayout(bar)
 
-        self.table = make_table(["Username", "Full name", "Role", "Active", "Last login"])
+        self.table = make_table(
+            ["", "Username", "Full name", "Role", "Active", "Last login"],
+            extended_selection=True,
+        )
+        self.table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.table)
 
         self.new_btn.clicked.connect(self._new)
         self.edit_btn.clicked.connect(self._edit)
+        self.delete_btn.clicked.connect(self._delete)
+        self.delete_many_btn.clicked.connect(self._delete_many)
         self.refresh_btn.clicked.connect(self.refresh)
         self.refresh()
 
@@ -136,20 +151,37 @@ class UsersView(QWidget):
         item = self.table.item(row, 0)
         return int(item.data(Qt.ItemDataRole.UserRole)) if item else None
 
+    def _checked_ids(self) -> list[int]:
+        out: list[int] = []
+        for r in range(self.table.rowCount()):
+            it = self.table.item(r, 0)
+            if it and it.checkState() == Qt.CheckState.Checked:
+                rid = it.data(Qt.ItemDataRole.UserRole)
+                if rid is not None:
+                    out.append(int(rid))
+        return out
+
     def refresh(self) -> None:
         with session_scope() as session:
             users = session.query(User).order_by(User.username).all()
             self.table.setRowCount(len(users))
             for r, u in enumerate(users):
-                item = QTableWidgetItem(u.username)
-                item.setData(Qt.ItemDataRole.UserRole, u.id)
-                self.table.setItem(r, 0, item)
-                self.table.setItem(r, 1, QTableWidgetItem(u.full_name))
-                self.table.setItem(r, 2, QTableWidgetItem(u.role))
-                self.table.setItem(r, 3, QTableWidgetItem("yes" if u.is_active else "no"))
+                sel = QTableWidgetItem("")
+                sel.setFlags(
+                    sel.flags()
+                    | Qt.ItemFlag.ItemIsUserCheckable
+                    | Qt.ItemFlag.ItemIsEnabled
+                )
+                sel.setCheckState(Qt.CheckState.Unchecked)
+                sel.setData(Qt.ItemDataRole.UserRole, u.id)
+                self.table.setItem(r, 0, sel)
+                self.table.setItem(r, 1, QTableWidgetItem(u.username))
+                self.table.setItem(r, 2, QTableWidgetItem(u.full_name))
+                self.table.setItem(r, 3, QTableWidgetItem(u.role))
+                self.table.setItem(r, 4, QTableWidgetItem("yes" if u.is_active else "no"))
                 self.table.setItem(
                     r,
-                    4,
+                    5,
                     QTableWidgetItem(
                         u.last_login_at.isoformat(timespec="minutes")
                         if u.last_login_at
@@ -174,3 +206,42 @@ class UsersView(QWidget):
         dlg = UserEditor(user, self)
         if dlg.exec():
             self.refresh()
+
+    def _delete(self) -> None:
+        uid = self._selected_id()
+        if uid is None:
+            return
+        if (
+            QMessageBox.question(self, "Delete user", "Delete this user account?")
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        with session_scope() as session:
+            user = session.get(User, uid)
+            if user is None:
+                return
+            session.delete(user)
+        global_bus.dataChanged.emit()
+        self.refresh()
+
+    def _delete_many(self) -> None:
+        ids = self._checked_ids()
+        if not ids:
+            QMessageBox.information(self, "Delete", "Tick one or more rows in the first column.")
+            return
+        if (
+            QMessageBox.question(
+                self,
+                "Delete users",
+                f"Delete {len(ids)} selected user account(s)?",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        with session_scope() as session:
+            for uid in ids:
+                user = session.get(User, uid)
+                if user is not None:
+                    session.delete(user)
+        global_bus.dataChanged.emit()
+        self.refresh()

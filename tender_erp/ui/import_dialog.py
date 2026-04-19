@@ -15,7 +15,26 @@ from .event_bus import global_bus
 
 IMPORT_MODULES = {
     "Firms": ["name", "gstin", "pan", "udyam", "address", "contact_person", "contact_phone", "contact_email"],
-    "Tenders": ["firm_name", "bid_no", "organisation", "department", "state", "location", "publish_date", "due_date", "tender_value", "emd", "participation_status"],
+    "Tenders": [
+        "firm_name",
+        "bid_no",
+        "organisation",
+        "department",
+        "state",
+        "location",
+        "publish_date",
+        "due_date",
+        "tender_value",
+        "emd",
+        "participation_status",
+        "contract_period_months",
+        "quantity",
+        "nature_of_work",
+        "category",
+        "service_days",
+        "publish_rate",
+        "quoted_rates",
+    ],
     "E-Stamps": ["firm_name", "entry_date", "tender_name_text", "quantity", "unit_rate"],
     "Compliance": ["firm_name", "document_name", "document_type", "certificate_no", "issue_date", "expiry_date", "status"],
     "Users": ["username", "full_name", "role", "email"]
