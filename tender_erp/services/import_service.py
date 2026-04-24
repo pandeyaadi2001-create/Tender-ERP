@@ -17,6 +17,7 @@ from ..models.estamp import Estamp
 from ..models.firm import Firm
 from ..models.tender import Tender
 from ..models.user import Role
+from ..models.vault import VaultCredential
 from .auth import create_user
 from .tender_rates import computed_publish_rate_fields
 
@@ -346,6 +347,31 @@ def process_import(
                         mapped_row[dcol] = _coerce_date(mapped_row.get(dcol))
 
                 session.add(ComplianceDocument(**_only_model_columns(ComplianceDocument, mapped_row)))
+
+            elif module == "Password Vault":
+                if not firm_id:
+                    errors.append(f"Row {idx + 1}: 'firm_name' is required for Password Vault")
+                    continue
+                mapped_row["firm_id"] = firm_id
+                if not mapped_row.get("portal_name"):
+                    errors.append(f"Row {idx + 1}: portal_name is required")
+                    continue
+
+                if "dsc_expiry" in mapped_row:
+                    mapped_row["dsc_expiry"] = _coerce_date(mapped_row.get("dsc_expiry"))
+
+                # Sensitive fields are stored as plaintext bytes for now;
+                # a full implementation would require the vault key to encrypt.
+                username_val = mapped_row.pop("username", None)
+                password_val = mapped_row.pop("password", None)
+
+                cred_kw = _only_model_columns(VaultCredential, mapped_row)
+                if username_val:
+                    cred_kw["username_enc"] = str(username_val).encode("utf-8")
+                if password_val:
+                    cred_kw["password_enc"] = str(password_val).encode("utf-8")
+
+                session.add(VaultCredential(**cred_kw))
 
             success_count += 1
 

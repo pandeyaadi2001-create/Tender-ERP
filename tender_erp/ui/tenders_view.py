@@ -7,11 +7,13 @@ from datetime import date
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
@@ -19,6 +21,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
@@ -105,8 +108,24 @@ class TenderEditor(QDialog):
         self.tender_id = tender.id if tender else None
         self.setWindowTitle("Edit Tender" if tender else "New Tender")
         self.setMinimumWidth(560)
+        self.setSizeGripEnabled(True)
 
-        layout = QVBoxLayout(self)
+        # Limit height to 80% of screen
+        screen = QApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            self.setMaximumHeight(int(available.height() * 0.9))
+            self.resize(580, min(750, int(available.height() * 0.8)))
+
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 8)
+
+        # Scroll area wrapping the form
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        form_container = QWidget()
+        form_layout = QVBoxLayout(form_container)
         form = QFormLayout()
 
         self.firm_cb = QComboBox()
@@ -260,14 +279,16 @@ class TenderEditor(QDialog):
         self.awarded_check.toggled.connect(self._toggle_award)
         self._toggle_award(self.awarded_check.isChecked())
 
-        layout.addLayout(form)
+        form_layout.addLayout(form)
+        scroll.setWidget(form_container)
+        outer_layout.addWidget(scroll, 1)
 
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
         )
         btns.accepted.connect(self._save)
         btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
+        outer_layout.addWidget(btns)
 
     def _toggle_award(self, checked: bool):
         for w in [self.awarded_date, self.awarded_value, self.loa_po, self.exec_status_cb,
@@ -373,6 +394,8 @@ class TendersView(QWidget):
         self.delete_btn = QPushButton("Delete")
         self.delete_many_btn = QPushButton("Delete selected")
         self.import_btn = QPushButton("Import Excel")
+        self.sample_btn = QPushButton("📥 Sample Excel")
+        self.sample_btn.setToolTip("Download a sample Excel file showing the expected import format")
         self.generate_btn = QPushButton("Generate submission checklist")
         self.refresh_btn = QPushButton("Refresh")
         
@@ -388,6 +411,7 @@ class TendersView(QWidget):
         bar.addWidget(self.delete_btn)
         bar.addWidget(self.delete_many_btn)
         bar.addWidget(self.import_btn)
+        bar.addWidget(self.sample_btn)
         bar.addWidget(self.generate_btn)
         bar.addWidget(self.filter)
         bar.addWidget(self.status_filter)
@@ -406,6 +430,7 @@ class TendersView(QWidget):
         self.delete_btn.clicked.connect(self._delete)
         self.delete_many_btn.clicked.connect(self._delete_many)
         self.import_btn.clicked.connect(self._open_import)
+        self.sample_btn.clicked.connect(self._download_sample)
         self.generate_btn.clicked.connect(self._generate_checklist)
         self.refresh_btn.clicked.connect(self.refresh)
         self.filter.textChanged.connect(self.refresh)
@@ -552,7 +577,8 @@ class TendersView(QWidget):
                         self._set_row_color(r, "#eab308")  # Yellow
                     else:
                         self._set_row_color(r, "#22c55e")  # Green
-            self.table.setSortingEnabled(True)
+        self.table.setSortingEnabled(True)
+        self.table.resizeColumnsToContents()
 
     def _open_editor(self, tender: Tender | None) -> None:
         with session_scope() as session:
@@ -660,6 +686,24 @@ class TendersView(QWidget):
             "Checklist generated",
             f"{len(items)} items. PDF: {pdf}",
         )
+
+    def _download_sample(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Sample Tenders Template", "tenders_sample.xlsx",
+            "Excel Files (*.xlsx)",
+        )
+        if not path:
+            return
+        try:
+            from ..services.sample_templates import save_sample_template
+            save_sample_template("Tenders", path)
+            QMessageBox.information(
+                self, "Sample Saved",
+                f"Sample Tenders template saved to:\n{path}\n\n"
+                "Open it to see the expected column format for importing.",
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Error", f"Failed to save sample: {exc}")
 
     def _open_import(self):
         from .import_dialog import ImportDialog

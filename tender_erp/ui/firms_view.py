@@ -192,6 +192,7 @@ class FirmsView(QWidget):
                 self.table.setItem(r, 4, QTableWidgetItem(f.udyam or "-"))
                 self.table.setItem(r, 5, QTableWidgetItem(f.contact_person or "-"))
                 self.table.setItem(r, 6, QTableWidgetItem("yes" if f.is_archived else "no"))
+        self.table.resizeColumnsToContents()
 
     def _new(self) -> None:
         dlg = FirmEditor(None, self)

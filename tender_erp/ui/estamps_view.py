@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
@@ -416,6 +417,8 @@ class EstampsView(QWidget):
         header.addStretch()
 
         self.import_btn = QPushButton("Import Excel")
+        self.sample_btn = QPushButton("📥 Sample Excel")
+        self.sample_btn.setToolTip("Download a sample Excel file showing the expected import format")
         self.queue_btn = QPushButton("+ Queue Purchase")
         self.queue_btn.setObjectName("primaryBtn")
         self.record_btn = QPushButton("+ Record Purchase")
@@ -423,6 +426,7 @@ class EstampsView(QWidget):
         self.refresh_btn = QPushButton("Refresh")
 
         header.addWidget(self.import_btn)
+        header.addWidget(self.sample_btn)
         header.addWidget(self.queue_btn)
         header.addWidget(self.record_btn)
         header.addWidget(self.refresh_btn)
@@ -490,6 +494,7 @@ class EstampsView(QWidget):
         self.record_btn.clicked.connect(self._record_purchase)
         self.refresh_btn.clicked.connect(self.refresh)
         self.import_btn.clicked.connect(self._open_import)
+        self.sample_btn.clicked.connect(self._download_sample)
         self.edit_btn.clicked.connect(self._edit)
         self.delete_btn.clicked.connect(self._delete)
         self.delete_many_btn.clicked.connect(self._delete_many)
@@ -607,6 +612,7 @@ class EstampsView(QWidget):
                 self.table.setItem(r, 10, QTableWidgetItem(e.voucher_number or "-"))
 
             self.table.setSortingEnabled(True)
+            self.table.resizeColumnsToContents()
 
     def _update_tile(self, tile: QWidget, value: str):
         for child in tile.findChildren(QLabel):
@@ -699,6 +705,24 @@ class EstampsView(QWidget):
         dlg = RecordPurchaseDialog(firms, self)
         if dlg.exec():
             self.refresh()
+
+    def _download_sample(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Sample E-Stamps Template", "estamps_sample.xlsx",
+            "Excel Files (*.xlsx)",
+        )
+        if not path:
+            return
+        try:
+            from ..services.sample_templates import save_sample_template
+            save_sample_template("E-Stamps", path)
+            QMessageBox.information(
+                self, "Sample Saved",
+                f"Sample E-Stamps template saved to:\n{path}\n\n"
+                "Open it to see the expected column format for importing.",
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Error", f"Failed to save sample: {exc}")
 
     def _open_import(self):
         from .import_dialog import ImportDialog

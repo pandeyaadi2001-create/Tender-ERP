@@ -179,12 +179,15 @@ class ComplianceView(QWidget):
         self.delete_btn = QPushButton("Delete")
         self.delete_many_btn = QPushButton("Delete selected")
         self.import_btn = QPushButton("Import Excel")
+        self.sample_btn = QPushButton("📥 Sample Excel")
+        self.sample_btn.setToolTip("Download a sample Excel file showing the expected import format")
         self.refresh_btn = QPushButton("Refresh")
         bar.addWidget(self.new_btn)
         bar.addWidget(self.edit_btn)
         bar.addWidget(self.delete_btn)
         bar.addWidget(self.delete_many_btn)
         bar.addWidget(self.import_btn)
+        bar.addWidget(self.sample_btn)
         bar.addStretch(1)
         bar.addWidget(self.refresh_btn)
         layout.addLayout(bar)
@@ -213,6 +216,7 @@ class ComplianceView(QWidget):
         self.delete_btn.clicked.connect(self._delete)
         self.delete_many_btn.clicked.connect(self._delete_many)
         self.import_btn.clicked.connect(self._open_import)
+        self.sample_btn.clicked.connect(self._download_sample)
         self.refresh_btn.clicked.connect(self.refresh)
         self.refresh()
 
@@ -281,6 +285,7 @@ class ComplianceView(QWidget):
                         self._set_row_color(r, "#eab308") # Yellow
                     else:
                         self._set_row_color(r, "#22c55e") # Green
+        self.table.resizeColumnsToContents()
 
     def _with_firms(self):
         with session_scope() as session:
@@ -368,6 +373,24 @@ class ComplianceView(QWidget):
                 )
         global_bus.dataChanged.emit()
         self.refresh()
+
+    def _download_sample(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Sample Compliance Template", "compliance_sample.xlsx",
+            "Excel Files (*.xlsx)",
+        )
+        if not path:
+            return
+        try:
+            from ..services.sample_templates import save_sample_template
+            save_sample_template("Compliance", path)
+            QMessageBox.information(
+                self, "Sample Saved",
+                f"Sample Compliance template saved to:\n{path}\n\n"
+                "Open it to see the expected column format for importing.",
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Error", f"Failed to save sample: {exc}")
 
     def _open_import(self):
         from .import_dialog import ImportDialog

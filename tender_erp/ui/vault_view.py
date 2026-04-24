@@ -12,6 +12,7 @@ from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QInputDialog,
@@ -65,10 +66,13 @@ class VaultView(QWidget):
         self.refresh_btn = QPushButton("Refresh")
         self.copy_btn = QPushButton("Copy password")
         self.import_btn = QPushButton("Import Excel")
+        self.sample_btn = QPushButton("📥 Sample Excel")
+        self.sample_btn.setToolTip("Download a sample Excel file showing the expected import format")
         bar.addWidget(self.unlock_btn)
         bar.addWidget(self.lock_btn)
         bar.addWidget(self.copy_btn)
         bar.addWidget(self.import_btn)
+        bar.addWidget(self.sample_btn)
         bar.addStretch(1)
         bar.addWidget(self.refresh_btn)
         layout.addLayout(bar)
@@ -86,6 +90,7 @@ class VaultView(QWidget):
         self.refresh_btn.clicked.connect(self.refresh)
         self.copy_btn.clicked.connect(self._copy_password)
         self.import_btn.clicked.connect(self._open_import)
+        self.sample_btn.clicked.connect(self._download_sample)
         self._update_status()
 
     # --- vault session gate --------------------------------------------
@@ -149,6 +154,7 @@ class VaultView(QWidget):
                 self.table.setItem(
                     r, 5, QTableWidgetItem(c.dsc_expiry.isoformat() if c.dsc_expiry else "-")
                 )
+        self.table.resizeColumnsToContents()
 
     def _selected_id(self) -> int | None:
         row = self.table.currentRow()
@@ -200,6 +206,25 @@ class VaultView(QWidget):
             "Copied",
             f"Password copied. Clipboard clears in {SETTINGS.clipboard_clear_seconds}s.",
         )
+
+    def _download_sample(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Sample Password Vault Template", "vault_sample.xlsx",
+            "Excel Files (*.xlsx)",
+        )
+        if not path:
+            return
+        try:
+            from ..services.sample_templates import save_sample_template
+            save_sample_template("Password Vault", path)
+            QMessageBox.information(
+                self, "Sample Saved",
+                f"Sample Password Vault template saved to:\n{path}\n\n"
+                "Open it to see the expected column format for importing.\n\n"
+                "⚠ Remember to delete the file after import — it contains plaintext passwords!",
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Error", f"Failed to save sample: {exc}")
 
     def _open_import(self):
         from .import_dialog import ImportDialog

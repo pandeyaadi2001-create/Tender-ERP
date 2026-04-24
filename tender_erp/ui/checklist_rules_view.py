@@ -191,6 +191,7 @@ class ChecklistRulesView(QWidget):
                 self.table.setItem(r, 3, QTableWidgetItem(rule.condition_value or "-"))
                 self.table.setItem(r, 4, QTableWidgetItem(rule.required_document))
                 self.table.setItem(r, 5, QTableWidgetItem("yes" if rule.is_active else "no"))
+        self.table.resizeColumnsToContents()
 
     def _new(self) -> None:
         dlg = RuleEditor(None, self)

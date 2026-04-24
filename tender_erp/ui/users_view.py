@@ -188,6 +188,7 @@ class UsersView(QWidget):
                         else "-"
                     ),
                 )
+        self.table.resizeColumnsToContents()
 
     def _new(self) -> None:
         dlg = UserEditor(None, self)

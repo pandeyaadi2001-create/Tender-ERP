@@ -37,6 +37,7 @@ IMPORT_MODULES = {
     ],
     "E-Stamps": ["firm_name", "entry_date", "tender_name_text", "quantity", "unit_rate"],
     "Compliance": ["firm_name", "document_name", "document_type", "certificate_no", "issue_date", "expiry_date", "status"],
+    "Password Vault": ["firm_name", "portal_name", "portal_url", "username", "password", "dsc_holder", "dsc_expiry", "registered_mobile", "registered_email", "notes"],
     "Users": ["username", "full_name", "role", "email"]
 }
 
@@ -65,12 +66,16 @@ class ImportDialog(QDialog):
         self.file_label = QLabel("No file selected")
         self.pick_btn = QPushButton("Browse Excel...")
         self.pick_btn.clicked.connect(self._pick_file)
+        self.sample_btn = QPushButton("📥 Download Sample")
+        self.sample_btn.setToolTip("Save a sample Excel template for the selected module")
+        self.sample_btn.clicked.connect(self._download_sample)
         
         top_layout.addWidget(QLabel("Target Module:"))
         top_layout.addWidget(self.module_cb)
         top_layout.addSpacing(20)
         top_layout.addWidget(self.file_label, stretch=1)
         top_layout.addWidget(self.pick_btn)
+        top_layout.addWidget(self.sample_btn)
         top_group.setLayout(top_layout)
         layout.addWidget(top_group)
 
@@ -103,6 +108,46 @@ class ImportDialog(QDialog):
         layout.addLayout(btn_layout)
 
         self._rebuild_mapping()
+
+    def _download_sample(self):
+        module = self.module_cb.currentText()
+        # Map import module names to sample_templates module names
+        template_map = {
+            "Tenders": "Tenders",
+            "Compliance": "Compliance",
+            "E-Stamps": "E-Stamps",
+            "Password Vault": "Password Vault",
+        }
+        template_name = template_map.get(module)
+        if not template_name:
+            QMessageBox.information(
+                self, "Sample Not Available",
+                f"No sample template is available for the '{module}' module.",
+            )
+            return
+
+        default_name = f"{module.lower().replace(' ', '_').replace('-', '')}_sample.xlsx"
+        path, _ = QFileDialog.getSaveFileName(
+            self, f"Save Sample {module} Template", default_name,
+            "Excel Files (*.xlsx)",
+        )
+        if not path:
+            return
+        try:
+            from ..services.sample_templates import save_sample_template
+            save_sample_template(template_name, path)
+            self.log_view.append(
+                f"<span style='color:green;'><b>Sample template saved:</b> {path}</span>"
+            )
+            QMessageBox.information(
+                self, "Sample Saved",
+                f"Sample {module} template saved to:\n{path}\n\n"
+                "Open it to see the expected column format, then fill in your data.",
+            )
+        except Exception as exc:
+            self.log_view.append(
+                f"<span style='color:red;'>Failed to save sample: {exc}</span>"
+            )
 
     def _pick_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select Excel File", "", "Excel Files (*.xlsx *.xls)")
