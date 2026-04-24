@@ -12,7 +12,7 @@ most of v1.0**: user auth with roles, firm management, tender tracker,
 compliance tracker, dashboard with deadline queries, e-stamp ledger,
 password vault (AES-256-GCM + Argon2id), checklist generator with
 rule library, first-run wizard state machine, audit log, global
-search, Excel importer, and backup.
+search, Excel importer (with downloadable templates), and backup.
 
 ## Tech stack
 
@@ -160,6 +160,11 @@ tests/                   # pytest, no Qt dependency
   issues UPDATE/DELETE on `audit_log`.
 - **No plaintext passwords** ever hit the audit log — the recorder
   strips any field ending in `_enc` before JSON-serialising.
+
+## Recent Improvements
+
+- **Enhanced Excel Import**: Added downloadable sample templates for Tenders, Compliance, E-Stamps, and Password Vault modules.
+- **UI Ergonomics**: Improved application usability with scrollable dialogs and auto-resizing table columns for better data visibility.
 
 ## What's intentionally not here (yet)
 
