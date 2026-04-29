@@ -12,8 +12,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Sequence
 
-from sqlalchemy import and_, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, case, func, select
+from sqlalchemy.orm import Session, selectinload
 
 from ..models.compliance import ComplianceDocument
 from ..models.estamp import Estamp
@@ -35,11 +35,15 @@ def is_participating_status(status: str | None) -> bool:
 
 
 def count_participating_tenders(session: Session) -> int:
-    return sum(
-        1
-        for t in session.query(Tender).filter(Tender.is_reference == False).all()  # noqa: E712
-        if is_participating_status(t.participation_status)
+    status = func.lower(func.coalesce(Tender.participation_status, ""))
+    stmt = (
+        select(func.count(Tender.id))
+        .where(Tender.is_reference == False)  # noqa: E712
+        .where(status.like("%participated%"))
+        .where(status.not_like("%not participated%"))
+        .where(status != "cancelled")
     )
+    return int(session.scalar(stmt) or 0)
 
 
 @dataclass
@@ -89,6 +93,7 @@ def tenders_due_between(
     hi = today + timedelta(days=max_days)
     stmt = (
         select(Tender)
+        .options(selectinload(Tender.firm))
         .where(Tender.due_date.is_not(None))
         .where(Tender.due_date >= lo)
         .where(Tender.due_date <= hi)
@@ -105,6 +110,7 @@ def compliance_expiring_within(
     cutoff = today + timedelta(days=days)
     stmt = (
         select(ComplianceDocument)
+        .options(selectinload(ComplianceDocument.firm))
         .where(ComplianceDocument.expiry_date.is_not(None))
         .where(ComplianceDocument.expiry_date <= cutoff)
         .where(ComplianceDocument.status != "Not Applicable")
@@ -139,17 +145,19 @@ def estamp_month_to_date(
 ) -> EstampSummary:
     today = today or date.today()
     start = today.replace(day=1)
-    rows = session.scalars(
-        select(Estamp).where(
+    total_expr = _estamp_total_expr()
+    count, total = session.execute(
+        select(
+            func.coalesce(func.sum(Estamp.quantity), 0),
+            func.coalesce(func.sum(total_expr), 0.0),
+        ).where(
             and_(
                 Estamp.entry_date >= start,
                 Estamp.entry_date <= today,
                 Estamp.status.in_(("purchased", "allocated", "used")),
             )
         )
-    ).all()
-    count = sum(r.quantity for r in rows)
-    total = sum(r.total for r in rows)
+    ).one()
 
     try:
         last_start = start.replace(year=start.year - 1)
@@ -162,17 +170,16 @@ def estamp_month_to_date(
         last_start = last_end = None  # type: ignore[assignment]
     last_total = 0.0
     if last_start and last_end:
-        last_rows = session.scalars(
-            select(Estamp).where(
+        last_total = session.scalar(
+            select(func.coalesce(func.sum(total_expr), 0.0)).where(
                 and_(
                     Estamp.entry_date >= last_start,
                     Estamp.entry_date <= last_end,
                     Estamp.status.in_(("purchased", "allocated", "used")),
                 )
             )
-        ).all()
-        last_total = sum(r.total for r in last_rows)
-    return EstampSummary(count=count, total_spent=round(total, 2), vs_same_month_last_fy=round(last_total, 2))
+        )
+    return EstampSummary(count=int(count or 0), total_spent=round(float(total or 0), 2), vs_same_month_last_fy=round(float(last_total or 0), 2))
 
 
 @dataclass
@@ -189,28 +196,82 @@ class EstampStatusSummary:
     denomination_breakdown: dict = field(default_factory=dict)
 
 
+def _estamp_denomination_expr():
+    return case(
+        (
+            and_(Estamp.denomination.is_not(None), Estamp.denomination != 0),
+            Estamp.denomination,
+        ),
+        else_=Estamp.unit_rate,
+    )
+
+
+def _estamp_total_expr():
+    return func.coalesce(Estamp.actual_cost, _estamp_denomination_expr()) * Estamp.quantity
+
+
 def estamp_status_summary(session: Session) -> EstampStatusSummary:
     """Build the full e-stamp status for dashboard tiles."""
-    all_estamps = session.query(Estamp).all()
     summary = EstampStatusSummary()
     denom_purchased: dict[float, int] = defaultdict(int)
     denom_required: dict[float, int] = defaultdict(int)
 
-    for e in all_estamps:
-        denom = e.denomination or e.unit_rate
-        if e.status == "purchased":
-            summary.purchased_count += e.quantity
-            summary.purchased_value += e.total
-            denom_purchased[denom] += e.quantity
-        elif e.status == "pending":
-            summary.pending_count += e.quantity
-            summary.pending_value += (e.estimated_cost or e.total)
-            denom_required[denom] += e.quantity
-        elif e.status == "allocated":
-            summary.allocated_count += e.quantity
-            denom_purchased[denom] += e.quantity
-        elif e.status == "used":
-            summary.used_count += e.quantity
+    total_expr = _estamp_total_expr()
+    pending_value_expr = case(
+        (
+            and_(Estamp.estimated_cost.is_not(None), Estamp.estimated_cost != 0),
+            Estamp.estimated_cost,
+        ),
+        else_=total_expr,
+    )
+    value_expr = case(
+        (Estamp.status == "pending", pending_value_expr),
+        else_=total_expr,
+    )
+
+    status_rows = session.execute(
+        select(
+            Estamp.status,
+            func.coalesce(func.sum(Estamp.quantity), 0),
+            func.coalesce(func.sum(value_expr), 0.0),
+        )
+        .where(Estamp.status.in_(("purchased", "pending", "allocated", "used")))
+        .group_by(Estamp.status)
+    ).all()
+
+    for status, quantity, value in status_rows:
+        qty = int(quantity or 0)
+        amount = float(value or 0)
+        if status == "purchased":
+            summary.purchased_count = qty
+            summary.purchased_value = amount
+        elif status == "pending":
+            summary.pending_count = qty
+            summary.pending_value = amount
+        elif status == "allocated":
+            summary.allocated_count = qty
+        elif status == "used":
+            summary.used_count = qty
+
+    denom_expr = _estamp_denomination_expr()
+    denom_rows = session.execute(
+        select(
+            denom_expr.label("denomination"),
+            Estamp.status,
+            func.coalesce(func.sum(Estamp.quantity), 0),
+        )
+        .where(Estamp.status.in_(("purchased", "pending", "allocated")))
+        .group_by(denom_expr, Estamp.status)
+    ).all()
+
+    for denom, status, quantity in denom_rows:
+        if denom is None:
+            continue
+        qty = int(quantity or 0)
+        if status in ("purchased", "allocated"):
+            denom_purchased[float(denom)] += qty
+        elif status == "pending":
+            denom_required[float(denom)] += qty
 
     # Required upcoming = pending stamps not yet purchased
     summary.required_upcoming = summary.pending_count
@@ -242,6 +303,7 @@ def bids_awarded_by_firm_year(session: Session) -> list[AwardedFirmYear]:
     """Group awarded tenders by firm and financial year for the chart."""
     tenders = (
         session.query(Tender)
+        .options(selectinload(Tender.firm))
         .filter(Tender.awarded_flag == True)  # noqa: E712
         .filter(Tender.awarded_date.is_not(None))
         .all()
@@ -272,17 +334,14 @@ def bids_awarded_by_firm_year(session: Session) -> list[AwardedFirmYear]:
 
 def active_tenders_by_status(session: Session) -> dict[str, int]:
     """Count active tenders grouped by our_status for the donut chart."""
-    tenders = (
-        session.query(Tender)
-        .filter(Tender.is_reference == False)  # noqa: E712
-        .filter(Tender.awarded_flag == False)  # noqa: E712
-        .all()
-    )
-    counts: dict[str, int] = defaultdict(int)
-    for t in tenders:
-        status = t.our_status or "Draft"
-        counts[status] += 1
-    return dict(counts)
+    status_expr = func.coalesce(Tender.our_status, "Draft")
+    rows = session.execute(
+        select(status_expr, func.count(Tender.id))
+        .where(Tender.is_reference == False)  # noqa: E712
+        .where(Tender.awarded_flag == False)  # noqa: E712
+        .group_by(status_expr)
+    ).all()
+    return {str(status): int(count or 0) for status, count in rows}
 
 
 def _current_fy() -> str:

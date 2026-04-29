@@ -163,8 +163,21 @@ tests/                   # pytest, no Qt dependency
 
 ## Recent Improvements
 
+- **Faster dashboard snapshots**: Dashboard counts and e-stamp summaries now use SQL aggregates and eager-loaded relationships instead of loading entire tables into Python.
+- **More responsive tender tracker**: Tender filtering is database-backed, debounced while typing, and includes bid, organisation, firm, location, category, scope, and status fields.
+- **Cleaner compliance tracker workflow**: Compliance documents now have search, status filtering, a clear-filter action, result counts, double-click editing, and selection preservation after refresh.
+- **Better global search context**: Ctrl+K results include the related firm name so users can identify records faster.
 - **Enhanced Excel Import**: Added downloadable sample templates for Tenders, Compliance, E-Stamps, and Password Vault modules.
 - **UI Ergonomics**: Improved application usability with scrollable dialogs and auto-resizing table columns for better data visibility.
+
+## Suggested Next Improvements
+
+- Add a calendar view for tender due dates, compliance expiry dates, and e-stamp purchase deadlines.
+- Add win/loss analytics by firm, department, tender value band, and participation status.
+- Add saved views such as "Due this week", "Critical compliance", and "Awarded tenders".
+- Add PDF/document preview from compliance and tender attachments.
+- Add SQLite FTS5 search if datasets grow beyond tens of thousands of rows.
+- Add SQLCipher support for full database encryption at rest in production deployments.
 
 ## What's intentionally not here (yet)
 
@@ -177,5 +190,5 @@ tests/                   # pytest, no Qt dependency
 
 ## Status
 
-`v0.5` + most of `v1.0` is implemented, tested (28 passing tests), and
+`v0.5` + most of `v1.0` is implemented, tested (37 passing tests), and
 smoke-run end-to-end through the CLI.

@@ -31,6 +31,25 @@ def _seed_world() -> int:
                     bid_no="B",
                     due_date=today + timedelta(days=20),
                 ),
+                Tender(
+                    firm_id=firm.id,
+                    bid_no="C",
+                    due_date=today + timedelta(days=40),
+                    participation_status="Participated",
+                ),
+                Tender(
+                    firm_id=firm.id,
+                    bid_no="D",
+                    due_date=today + timedelta(days=40),
+                    participation_status="Not Participated",
+                ),
+                Tender(
+                    firm_id=firm.id,
+                    bid_no="E",
+                    due_date=today + timedelta(days=40),
+                    participation_status="Participated in Support",
+                    is_reference=True,
+                ),
                 ComplianceDocument(
                     firm_id=firm.id,
                     document_name="GST",
@@ -54,6 +73,7 @@ def test_snapshot_bucketing():
     with session_scope() as session:
         snap = dashboard.build_snapshot(session)
     assert snap.firm_count == 1
+    assert snap.total_tenders_participated == 1
     assert len(snap.tenders_7d) == 1
     assert snap.tenders_7d[0].bid_no == "A"
     assert snap.tenders_8_to_30d_count == 1

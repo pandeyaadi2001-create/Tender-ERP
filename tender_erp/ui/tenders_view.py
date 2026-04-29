@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, QTimer, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -27,6 +27,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from sqlalchemy import func, or_
+from sqlalchemy.orm import selectinload
 
 from ..db import session_scope
 from ..models.firm import Firm
@@ -44,6 +46,7 @@ PARTICIPATION_CHOICES = (
     "Not Participated",
     "Cancelled",
 )
+FILTER_DEBOUNCE_MS = 250
 
 # All columns aligned with Edit Tender form + checkbox, qty, service days, our status.
 TENDER_TABLE_COLUMNS = [
@@ -88,6 +91,10 @@ def _truncate_cell(text: str | None, max_len: int = 100) -> str:
     if len(s) <= max_len:
         return s
     return s[: max_len - 1] + "…"
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _qdate(d: date | None) -> QDate:
@@ -397,10 +404,12 @@ class TendersView(QWidget):
         self.sample_btn = QPushButton("📥 Sample Excel")
         self.sample_btn.setToolTip("Download a sample Excel file showing the expected import format")
         self.generate_btn = QPushButton("Generate submission checklist")
+        self.clear_filter_btn = QPushButton("Clear")
         self.refresh_btn = QPushButton("Refresh")
+        self.result_count = QLabel("0 tenders")
         
         self.filter = QLineEdit()
-        self.filter.setPlaceholderText("Filter by bid no / org")
+        self.filter.setPlaceholderText("Filter by bid no / org / firm")
         
         self.status_filter = QComboBox()
         self.status_filter.addItem("All Statuses", "")
@@ -415,7 +424,9 @@ class TendersView(QWidget):
         bar.addWidget(self.generate_btn)
         bar.addWidget(self.filter)
         bar.addWidget(self.status_filter)
+        bar.addWidget(self.clear_filter_btn)
         bar.addStretch(1)
+        bar.addWidget(self.result_count)
         bar.addWidget(self.refresh_btn)
         layout.addLayout(bar)
 
@@ -425,6 +436,12 @@ class TendersView(QWidget):
         self.table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.table)
 
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(FILTER_DEBOUNCE_MS)
+        self._filter_timer.timeout.connect(self.refresh)
+        self._columns_resized = False
+
         self.new_btn.clicked.connect(self._new)
         self.edit_btn.clicked.connect(self._edit)
         self.delete_btn.clicked.connect(self._delete)
@@ -432,9 +449,20 @@ class TendersView(QWidget):
         self.import_btn.clicked.connect(self._open_import)
         self.sample_btn.clicked.connect(self._download_sample)
         self.generate_btn.clicked.connect(self._generate_checklist)
+        self.clear_filter_btn.clicked.connect(self._clear_filters)
         self.refresh_btn.clicked.connect(self.refresh)
-        self.filter.textChanged.connect(self.refresh)
-        self.status_filter.currentTextChanged.connect(self.refresh)
+        self.filter.textChanged.connect(self._schedule_refresh)
+        self.status_filter.currentTextChanged.connect(self._schedule_refresh)
+        self.table.itemDoubleClicked.connect(lambda *_: self._edit())
+        self.refresh()
+
+    def _schedule_refresh(self) -> None:
+        self._filter_timer.start()
+
+    def _clear_filters(self) -> None:
+        self.filter.clear()
+        self.status_filter.setCurrentIndex(0)
+        self._filter_timer.stop()
         self.refresh()
 
     def _selected_id(self) -> int | None:
@@ -471,44 +499,48 @@ class TendersView(QWidget):
         return (self.status_filter.currentText() or "").strip()
 
     def refresh(self) -> None:
-        needle = (self.filter.text() or "").strip().lower()
+        selected_id = self._selected_id()
+        needle = (self.filter.text() or "").strip()
         status_filter = self._participation_filter_value()
 
         with session_scope() as session:
-            q = session.query(Tender).order_by(Tender.due_date.asc().nullslast())
-            tenders = q.all()
-            rows = []
-            for t in tenders:
-                hay = " ".join(
-                    filter(
-                        None,
-                        [
-                            t.bid_no,
-                            t.organisation,
-                            t.department,
-                            t.location,
-                            t.portal,
-                            t.category,
-                            t.state,
-                            t.nature_of_work,
-                            t.scope_of_work,
-                            t.participation_status,
-                            t.technical_status,
-                            t.firm.name if t.firm else None,
-                        ],
+            q = (
+                session.query(Tender)
+                .options(selectinload(Tender.firm))
+                .order_by(Tender.due_date.asc().nullslast())
+            )
+            if needle:
+                pat = f"%{_escape_like(needle)}%"
+                q = q.outerjoin(Tender.firm).filter(
+                    or_(
+                        Tender.bid_no.ilike(pat, escape="\\"),
+                        Tender.organisation.ilike(pat, escape="\\"),
+                        Tender.department.ilike(pat, escape="\\"),
+                        Tender.location.ilike(pat, escape="\\"),
+                        Tender.portal.ilike(pat, escape="\\"),
+                        Tender.category.ilike(pat, escape="\\"),
+                        Tender.state.ilike(pat, escape="\\"),
+                        Tender.nature_of_work.ilike(pat, escape="\\"),
+                        Tender.scope_of_work.ilike(pat, escape="\\"),
+                        Tender.participation_status.ilike(pat, escape="\\"),
+                        Tender.technical_status.ilike(pat, escape="\\"),
+                        Firm.name.ilike(pat, escape="\\"),
                     )
-                ).lower()
-                if needle and needle not in hay:
-                    continue
-                if status_filter:
-                    t_status = (t.participation_status or "").strip().lower()
-                    if t_status != status_filter.lower():
-                        continue
-                rows.append(t)
+                )
+            if status_filter:
+                q = q.filter(
+                    func.lower(func.coalesce(Tender.participation_status, ""))
+                    == status_filter.lower()
+                )
+            rows = q.all()
             
+            restore_row = -1
+            self.table.setUpdatesEnabled(False)
             self.table.setSortingEnabled(False)
             self.table.setRowCount(len(rows))
             for r, t in enumerate(rows):
+                if selected_id == t.id:
+                    restore_row = r
                 firm = t.firm.name if t.firm else "-"
                 pub = t.publish_date.isoformat() if t.publish_date else "-"
                 due = t.due_date.isoformat() if t.due_date else "-"
@@ -577,8 +609,14 @@ class TendersView(QWidget):
                         self._set_row_color(r, "#eab308")  # Yellow
                     else:
                         self._set_row_color(r, "#22c55e")  # Green
-        self.table.setSortingEnabled(True)
-        self.table.resizeColumnsToContents()
+            self.result_count.setText(f"{len(rows)} tender(s)")
+            self.table.setSortingEnabled(True)
+            self.table.setUpdatesEnabled(True)
+            if restore_row >= 0:
+                self.table.selectRow(restore_row)
+        if not self._columns_resized:
+            self.table.resizeColumnsToContents()
+            self._columns_resized = True
 
     def _open_editor(self, tender: Tender | None) -> None:
         with session_scope() as session:

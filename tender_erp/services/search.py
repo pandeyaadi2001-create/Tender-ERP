@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from sqlalchemy import or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from ..models.compliance import ComplianceDocument
 from ..models.tender import Tender
@@ -36,6 +36,7 @@ def global_search(session: Session, query: str, limit: int = 50) -> list[SearchR
     pat = f"%{q}%"
     tenders = session.scalars(
         select(Tender)
+        .options(selectinload(Tender.firm))
         .where(
             or_(
                 Tender.bid_no.ilike(pat),
@@ -48,6 +49,7 @@ def global_search(session: Session, query: str, limit: int = 50) -> list[SearchR
     ).all()
     compliances = session.scalars(
         select(ComplianceDocument)
+        .options(selectinload(ComplianceDocument.firm))
         .where(
             or_(
                 ComplianceDocument.certificate_no.ilike(pat),
@@ -60,23 +62,25 @@ def global_search(session: Session, query: str, limit: int = 50) -> list[SearchR
 
     results: list[SearchResult] = []
     for t in tenders:
+        firm_name = t.firm.name if t.firm else ""
         results.append(
             SearchResult(
                 kind="tender",
                 id=t.id,
                 firm_id=t.firm_id,
                 title=t.bid_no or t.organisation or f"Tender #{t.id}",
-                subtitle=" / ".join(filter(None, [t.organisation, t.department, t.location])),
+                subtitle=" / ".join(filter(None, [firm_name, t.organisation, t.department, t.location])),
             )
         )
     for c in compliances:
+        firm_name = c.firm.name if c.firm else ""
         results.append(
             SearchResult(
                 kind="compliance",
                 id=c.id,
                 firm_id=c.firm_id,
                 title=c.document_name,
-                subtitle=" / ".join(filter(None, [c.certificate_no, c.document_type])),
+                subtitle=" / ".join(filter(None, [firm_name, c.certificate_no, c.document_type])),
             )
         )
     return results

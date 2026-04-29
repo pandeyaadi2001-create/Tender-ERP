@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from PySide6.QtCore import QDate, Qt
+from PySide6.QtCore import QDate, QTimer, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
+    QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
@@ -22,6 +23,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from sqlalchemy import or_
+from sqlalchemy.orm import selectinload
 
 from ..config import ATTACHMENTS_DIR, ensure_dirs
 from ..db import session_scope
@@ -33,6 +36,11 @@ from .widgets import make_date_edit, make_table
 from .event_bus import global_bus
 
 STATUS_CHOICES = ("Active", "To Be Renewed", "Under Renewal", "Expired", "Not Applicable")
+FILTER_DEBOUNCE_MS = 250
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _qdate(d: date | None) -> QDate:
@@ -181,14 +189,25 @@ class ComplianceView(QWidget):
         self.import_btn = QPushButton("Import Excel")
         self.sample_btn = QPushButton("📥 Sample Excel")
         self.sample_btn.setToolTip("Download a sample Excel file showing the expected import format")
+        self.clear_filter_btn = QPushButton("Clear")
         self.refresh_btn = QPushButton("Refresh")
+        self.result_count = QLabel("0 documents")
+        self.filter = QLineEdit()
+        self.filter.setPlaceholderText("Filter by document / certificate / firm")
+        self.status_filter = QComboBox()
+        self.status_filter.addItem("All Statuses", "")
+        self.status_filter.addItems(STATUS_CHOICES)
         bar.addWidget(self.new_btn)
         bar.addWidget(self.edit_btn)
         bar.addWidget(self.delete_btn)
         bar.addWidget(self.delete_many_btn)
         bar.addWidget(self.import_btn)
         bar.addWidget(self.sample_btn)
+        bar.addWidget(self.filter)
+        bar.addWidget(self.status_filter)
+        bar.addWidget(self.clear_filter_btn)
         bar.addStretch(1)
+        bar.addWidget(self.result_count)
         bar.addWidget(self.refresh_btn)
         layout.addLayout(bar)
 
@@ -211,13 +230,32 @@ class ComplianceView(QWidget):
         self.table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.table)
 
+        self._filter_timer = QTimer(self)
+        self._filter_timer.setSingleShot(True)
+        self._filter_timer.setInterval(FILTER_DEBOUNCE_MS)
+        self._filter_timer.timeout.connect(self.refresh)
+        self._columns_resized = False
+
         self.new_btn.clicked.connect(self._new)
         self.edit_btn.clicked.connect(self._edit)
         self.delete_btn.clicked.connect(self._delete)
         self.delete_many_btn.clicked.connect(self._delete_many)
         self.import_btn.clicked.connect(self._open_import)
         self.sample_btn.clicked.connect(self._download_sample)
+        self.clear_filter_btn.clicked.connect(self._clear_filters)
         self.refresh_btn.clicked.connect(self.refresh)
+        self.filter.textChanged.connect(self._schedule_refresh)
+        self.status_filter.currentTextChanged.connect(self._schedule_refresh)
+        self.table.itemDoubleClicked.connect(lambda *_: self._edit())
+        self.refresh()
+
+    def _schedule_refresh(self) -> None:
+        self._filter_timer.start()
+
+    def _clear_filters(self) -> None:
+        self.filter.clear()
+        self.status_filter.setCurrentIndex(0)
+        self._filter_timer.stop()
         self.refresh()
 
     def _selected_id(self) -> int | None:
@@ -246,14 +284,40 @@ class ComplianceView(QWidget):
                 item.setForeground(brush)
 
     def refresh(self) -> None:
+        selected_id = self._selected_id()
+        needle = (self.filter.text() or "").strip()
+        status_filter = (
+            "" if self.status_filter.currentIndex() == 0 else self.status_filter.currentText()
+        )
+
         with session_scope() as session:
-            docs = (
+            q = (
                 session.query(ComplianceDocument)
+                .options(selectinload(ComplianceDocument.firm))
                 .order_by(ComplianceDocument.expiry_date.asc().nullslast())
-                .all()
             )
+            if needle:
+                pat = f"%{_escape_like(needle)}%"
+                q = q.outerjoin(ComplianceDocument.firm).filter(
+                    or_(
+                        ComplianceDocument.certificate_no.ilike(pat, escape="\\"),
+                        ComplianceDocument.document_name.ilike(pat, escape="\\"),
+                        ComplianceDocument.document_type.ilike(pat, escape="\\"),
+                        ComplianceDocument.issuing_authority.ilike(pat, escape="\\"),
+                        ComplianceDocument.responsible_person.ilike(pat, escape="\\"),
+                        Firm.name.ilike(pat, escape="\\"),
+                    )
+                )
+            if status_filter:
+                q = q.filter(ComplianceDocument.status == status_filter)
+            docs = q.all()
+            restore_row = -1
+            self.table.setUpdatesEnabled(False)
+            self.table.setSortingEnabled(False)
             self.table.setRowCount(len(docs))
             for r, d in enumerate(docs):
+                if selected_id == d.id:
+                    restore_row = r
                 sel = QTableWidgetItem("")
                 sel.setFlags(
                     sel.flags()
@@ -285,7 +349,14 @@ class ComplianceView(QWidget):
                         self._set_row_color(r, "#eab308") # Yellow
                     else:
                         self._set_row_color(r, "#22c55e") # Green
-        self.table.resizeColumnsToContents()
+            self.result_count.setText(f"{len(docs)} document(s)")
+            self.table.setSortingEnabled(True)
+            self.table.setUpdatesEnabled(True)
+            if restore_row >= 0:
+                self.table.selectRow(restore_row)
+        if not self._columns_resized:
+            self.table.resizeColumnsToContents()
+            self._columns_resized = True
 
     def _with_firms(self):
         with session_scope() as session:
